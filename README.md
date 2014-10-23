@@ -18,7 +18,7 @@ The redaction capabilty provides:
 - removal of PDF annotations, which can store URLs of linked documents and email addresses
 - replacement of native PDF metadata with Producer = "iText® 5.5.2 ©2000-2014 iText Group NV (AGPL-version)" (this is a requirement of itext's AGPL license) and Creator = "Redact v0.1 ©2014 NICTA (AGPL)"
 
-See also: [redact](https://github.com/NICTA/t3as-redact) which depends on this project.
+See also: [t3as-redact](https://github.com/NICTA/t3as-redact) which depends on this project.
 
 ### License
 
