@@ -20,9 +20,9 @@ The redaction capabilty provides:
 
 See also: [t3as-redact](https://github.com/NICTA/t3as-redact) which depends on this project.
 
-### License
+### Legal
 
-This software is released under the terms of the [AGPL](http://www.gnu.org/licenses/agpl-3.0.en.html).
+This software is released under the terms of the [AGPL](http://www.gnu.org/licenses/agpl-3.0.en.html). Source code for all transitive dependencies is available at [t3as-legal](https://github.com/NICTA/t3as-legal).
 
 ### Build
  
