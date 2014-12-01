@@ -2,7 +2,7 @@ organization := "org.t3as"
 
 name := "pdf"
 
-version := "0.1"
+version := "0.2"
 
 licenses := Seq("GNU Affero General Public License v3" -> url("http://www.gnu.org/licenses/agpl-3.0.en.html"))
 

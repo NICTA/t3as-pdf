@@ -21,21 +21,18 @@
 package org.t3as.pdf
 
 import java.io.{File, FileOutputStream}
-
 import scala.collection.JavaConversions.asScalaSet
 import scala.collection.mutable.ListBuffer
 import scala.language.postfixOps
-
 import org.slf4j.LoggerFactory
-
 import com.itextpdf.text.{Document, Paragraph}
 import com.itextpdf.text.io.RandomAccessSourceFactory
 import com.itextpdf.text.pdf.{PRStream, PRTokeniser, PdfName, PdfReader, PdfWriter, RandomAccessFileOrArray}
 import com.itextpdf.text.pdf.parser.PdfReaderContentParser
-
 import PdfCopyRedact.RedactItem
 import resource.managed
 import scopt.Read
+import com.itextpdf.text.pdf.parser.LocationTextExtractionStrategy
 
 object Pdf {
   val log = LoggerFactory.getLogger(getClass)
@@ -151,7 +148,8 @@ object Pdf {
       i <- 1 to r.getNumberOfPages
     } {
       log.debug(s"extract: page $i")
-      pages += p.processContent(i, new MyExtractionStrategy).result.text
+      // pages += p.processContent(i, new LocationTextExtractionStrategy).getResultantText()
+      pages += p.processContent(i, new MyExtractionStrategy).getResultantText
     }
     pages.toList
   }

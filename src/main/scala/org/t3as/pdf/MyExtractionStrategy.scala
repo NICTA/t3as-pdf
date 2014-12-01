@@ -127,7 +127,8 @@ class MyExtractionStrategy extends TextExtractionStrategy with HasStreamOffset {
     // Also: /FirstChar = /LastChar = 33 ('!' as decimal)
     // But I've also seen: ("!) Tj, with /FirstChar = 33, /LastChar = 34 ('"' as decimal), but still with no /Encoding attribute.
     // So we skip blank encoding.
-    if (r.getFont.getEncoding != "") {
+    // if (r.getFont.getEncoding != "") {
+    // Whoops. Can't do this as other PDFs have blank font encoding for all their text!
       import Vector.I2
       val fontHeight = r.getAscentLine.getStartPoint.get(I2) - r.getDescentLine.getStartPoint.get(I2)
       // remove the rise from the baseline - we do this because the text from a super/subscript render operation should probably be considered as part of the baseline of the text 
@@ -136,7 +137,7 @@ class MyExtractionStrategy extends TextExtractionStrategy with HasStreamOffset {
         if (r.getRise != 0) b else b.transformBy(new Matrix(0, -r.getRise))
       }
       chunks += ExtendedChunk(r.getText, b.getStartPoint, b.getEndPoint, r.getSingleSpaceWidth, fontHeight, getStreamOffset())
-    }
+    // }
   }
 
   /** no-op, not interested in image events */
