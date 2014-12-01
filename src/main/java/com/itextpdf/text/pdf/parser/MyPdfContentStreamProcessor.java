@@ -1,7 +1,7 @@
 /*
  * Modified version of: com.itextpdf.text.pdf.parser.PdfContentStreamProcessor
  * with some private fields changed to protected and protected push/pop methods added,
- * to support sub-class org.t3as.itext.MyPdfTransformer.
+ * to support sub-class org.t3as.pdf.RedactionStreamProcessor.
  * Modifications Copyright (c) 2014 NICTA
  * 
  * $Id: PdfContentStreamProcessor.java 6134 2013-12-23 13:15:14Z blowagie $
