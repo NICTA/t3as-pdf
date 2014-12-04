@@ -20,33 +20,44 @@
  */
 package org.t3as.pdf
 
+import java.io.InputStream
+
 import scala.collection.mutable.ListBuffer
 
 import org.scalatest.{FlatSpec, Matchers}
-import org.slf4j.LoggerFactory
 
 import com.itextpdf.text.pdf.PdfReader
 import com.itextpdf.text.pdf.parser.PdfReaderContentParser
 
 import resource.managed
 
-
-class ExtractTest extends FlatSpec with Matchers {
-  val log = LoggerFactory.getLogger(getClass)
-
-  "MyExtractionStrategy" should "extract text" in {
-    // See itext book listing 15.26
+object ExtractTest {
+  
+  /**
+   * Extract text and close is.
+   * @param is PDF content
+   * @return extracted text
+   * @see itext book listing 15.26
+   */
+  def extract(is: InputStream): List[String] = {
     val pages = new ListBuffer[String]
     for {
-      in <- managed(getClass.getClassLoader.getResourceAsStream("SampleDoc.pdf"))
+      in <- managed(is)
       r <- managed(new PdfReader(in))
       p = new PdfReaderContentParser(r)
       i <- 1 to r.getNumberOfPages
-    } {
-      log.debug(s"page $i")
-      pages += p.processContent(i, new MyExtractionStrategy).getResultantText // or use itext's LocationTextExtractionStrategy
-    }
-    log.debug(s"pages ${pages.toList}")
+    } pages += p.processContent(i, new MyExtractionStrategy).getResultantText // or use itext's LocationTextExtractionStrategy
+    pages.toList
+  }  
+}
+
+class ExtractTest extends FlatSpec with Matchers {
+  import ExtractTest.extract
+  
+  // val log = LoggerFactory.getLogger(getClass)
+
+  "MyExtractionStrategy" should "extract text" in {
+    val pages = extract(getClass.getClassLoader.getResourceAsStream("SampleDoc.pdf"))
     pages(0).contains("Mark Kenny Chief Political Correspondent") should be(true)
   }
 
