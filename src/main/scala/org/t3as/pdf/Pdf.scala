@@ -34,6 +34,17 @@ import resource.managed
 import scopt.Read
 import com.itextpdf.text.pdf.parser.LocationTextExtractionStrategy
 
+/**
+ * CLI for PDF operations.
+ * 
+ * The `create`, `dump` and `parse` operations are just experiments with simple examples from the iText book,
+ * probably only useful for getting an understanding of iText & PDF.
+ * 
+ * The `extract` and `redact` operations allows experimentation with the improved text extraction and redaction features
+ * which this project adds to iText.
+ * 
+ * For GUI tool to inspect the structure of a PDF try http://itextpdf.com/product/itext_rups.
+ */
 object Pdf {
   val log = LoggerFactory.getLogger(getClass)
 
