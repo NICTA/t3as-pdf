@@ -29,7 +29,6 @@ import com.itextpdf.text.{Document, Paragraph}
 import com.itextpdf.text.io.RandomAccessSourceFactory
 import com.itextpdf.text.pdf.{PRStream, PRTokeniser, PdfName, PdfReader, PdfWriter, RandomAccessFileOrArray}
 import com.itextpdf.text.pdf.parser.PdfReaderContentParser
-import PdfCopyRedact.RedactItem
 import resource.managed
 import scopt.Read
 import com.itextpdf.text.pdf.parser.LocationTextExtractionStrategy
@@ -75,7 +74,7 @@ object Pdf {
 
     opt[File]("create") valueName("<output file>") action { (x, c) =>
       c.copy(create = Some(x))
-    } text(s"create `Hello World!` PDF file, default ${defValue.create}")
+    } text(s"create a very simple PDF file, default ${defValue.create}")
 
     opt[Unit]("dump") action { (_, c) =>
       c.copy(dump = true)
@@ -112,12 +111,17 @@ object Pdf {
     }
   }
 
+  // same text used in unit tests
+  val text = """Prime Minister Tony Abbott heads into the final sitting week of the parliamentary year on Monday with his
+government struggling to explain unpopular policies and his premiership facing its keenest test since he won the
+2013 election in a landslide."""
+  
   def create(out: File) = {
     log.debug(s"create: out = $out")
     val d = new Document
     PdfWriter.getInstance(d, new FileOutputStream(out))
     d.open
-    d.add(new Paragraph("Hello World!"))
+    d.add(new Paragraph(text))
     d.close
   }
 

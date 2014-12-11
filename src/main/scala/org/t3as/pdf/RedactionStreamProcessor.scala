@@ -33,13 +33,13 @@ import com.itextpdf.text.pdf.parser.{InlineImageUtils, MyPdfContentStreamProcess
   *
   * Based on com.itextpdf.text.pdf.parser.PdfReaderContentParser
   */
-class RedactionStreamProcessor(l: RenderListener with HasStreamOffset) extends MyPdfContentStreamProcessor(l) {
+class RedactionStreamProcessor(l: RenderListener with HasParserContext) extends MyPdfContentStreamProcessor(l) {
   private val log = LoggerFactory.getLogger(getClass)
 
   // provide StreamOffset
   private var startOffset = 0L
   private var endOffset = 0L
-  l.getStreamOffset = () => StreamOffset(startOffset, endOffset)
+  l.parserContext = () => ParserContext(startOffset, endOffset, gs.getFont, gs.getFontSize)
 
   /** Processes PDF syntax.
     * <b>Note:</b> If you re-use a given {@link PdfContentStreamProcessor}, you must call {@link PdfContentStreamProcessor#reset()}
@@ -48,7 +48,6 @@ class RedactionStreamProcessor(l: RenderListener with HasStreamOffset) extends M
     */
   override def processContent(contentBytes: Array[Byte], resDic: PdfDictionary) = {
     val src = new RandomAccessSourceFactory().createSource(contentBytes)
-    
     def getBytes(start: Long, end: Long) = {
       val b = new Array[Byte]((end - start).toInt)
       val n = src.get(start, b, 0, b.length)

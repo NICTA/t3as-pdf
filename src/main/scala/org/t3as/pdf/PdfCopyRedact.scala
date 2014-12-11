@@ -29,15 +29,10 @@ import org.slf4j.LoggerFactory
 import com.itextpdf.text.Document
 import com.itextpdf.text.pdf.{ MyPRStream, PRIndirectReference, PRStream, PdfArray, PdfCopy, PdfDictionary, PdfIndirectReference, PdfName, PdfReader }
 import com.itextpdf.text.pdf.parser.ContentByteUtils
-import PdfCopyRedact.RedactItem
 import com.itextpdf.text.pdf.PdfDocument
 import com.itextpdf.text.pdf.PdfDocument.PdfInfo
 import com.itextpdf.text.pdf.PdfAnnotation
-
-object PdfCopyRedact {
-  /** page and text offsets with page of item to be redacted */
-  case class RedactItem(page: Int, start: Int, end: Int)
-}
+import scala.util.Try
 
 class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactItem]) extends PdfCopy(doc, out) {
   private val log = LoggerFactory.getLogger(getClass)
@@ -45,7 +40,6 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
   private var origRawContent: Option[Array[Byte]] = None
   private var result: Option[MyResult] = None
   private var pageNum = 0
-  val utf8 = Charset.forName("UTF-8")
   
   pdf.addCreator("Redact v0.1 ©2014 NICTA (AGPL)")
 
@@ -57,8 +51,8 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
     val resDic = r.getPageN(pageNum).getAsDict(PdfName.RESOURCES)
     new RedactionStreamProcessor(l).processContent(ContentByteUtils.getContentBytesForPage(r, pageNum), resDic)
     result = Some(l.result)
-    //      log.debug(s"getImportedPage: page $pageNum, text = ${result.get.text}")
-
+    log.debug(s"getImportedPage: page $pageNum, MyExtractionStrategy.result = ${result.get.chunks.map(_.text).mkString("|")}")
+    // log.debug(s"getImportedPage: page $pageNum, MyExtractionStrategy.result = ${result.get.chunks.map(c => (c.parserContext.streamStart, c.textStart, c.text)).mkString("\n")}")
     super.getImportedPage(r, pageNum)
   }
 
@@ -99,16 +93,17 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
 
     val raw = PdfReader.getStreamBytesRaw(in)
     if (origRawContent.map(_.sameElements(raw)).getOrElse(false) && result.isDefined) {
-      try {
-        val b = PdfReader.decodeBytes(raw, in) // decodes according to filters such as FlateDecode
-        // can throw: com.itextpdf.text.exceptions.UnsupportedPdfException: The filter /DCTDecode is not supported.
-        // This is an image filter and the surrounding if should limit this code to the main content stream for the page (containing text), so it shouldn't happen.
-        s.setData(redact(b, redactItems.filter(_.page == pageNum).map(r => (r.start, r.end))), true) // deflates and sets `bytes` for MyPRStream.toPdf to use
-      } catch {
-        case NonFatal(e) => log.warn("Can't decode stream", e)
+      log.debug("MyPdfCopy.copyStream: redaction of page content stream...")
+      val tbytes = Try(PdfReader.decodeBytes(raw, in)) // decodes according to filters such as FlateDecode
+      // Try might catch: com.itextpdf.text.exceptions.UnsupportedPdfException: The filter /DCTDecode is not supported.
+      // This is an image filter and the surrounding if should limit this code to the main content stream for the page (containing text), so it shouldn't happen.
+      tbytes foreach { bytes => // success case
+        s.setData(redact(bytes, redactItems.filter(_.page == pageNum)), true) // deflates and sets `bytes` for MyPRStream.toPdf to use
       }
+      if (tbytes.isFailure) tbytes.failed.foreach(e => log.warn("Can't decode stream", e))
+      // Try.transform is more compact, but we don't want the same handling for exceptions from decodeBytes() and redact() 
     } else {
-      log.debug(s"MyPdfCopy.copyStream: doesn't match origRawContent so leaving it alone")
+      log.debug("MyPdfCopy.copyStream: doesn't match origRawContent so leaving it alone")
     }
 
     for (k <- in.getKeys) {
@@ -119,26 +114,89 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
       if (v2 != null) s.put(k, v2)
     }
 
-    //      log.debug(s"MyPdfCopy.copyStream:   end - in = $in")
+    // log.debug(s"MyPdfCopy.copyStream:   end - in = $in")
     s
   }
 
-  val tj = "([REDACTED])Tj".getBytes(utf8)
-
-  def redact(b: Array[Byte], redactTextOffsets: Seq[(Int, Int)]) = {
+  def redact(stream: Array[Byte], rItems: Seq[RedactItem]) = {
+    import Math.{min, max}
     val buf = new ArrayBuffer[Byte]
-    val chunkstoRedact = result.get.redact(redactTextOffsets)
-    var offset = 0
-    chunkstoRedact.foreach { c =>
-      log.debug(s"MyPdfCopy.redact: c = $c, deleted = '${new String(b.slice(c.start.toInt, c.end.toInt), utf8)}'")
-      buf ++= b.slice(offset, c.start.toInt)
-      buf ++= tj
-      offset = c.end.toInt
-    }
-    buf ++= b.slice(offset, b.length)
+    var streamOffset = 0
+    // var sumWidthRedacted = 0.0f
+    val textSoFar = new StringBuilder // includes redacted text, to get PDF moveText width for text following a redacted chunk
+    var tdNeeded = false
 
-    //      log.debug(s"MyPdfCopy.redact: in  = '${new String(b, utf8)}'")
-    //      log.debug(s"MyPdfCopy.redact: out = '${new String(buf.toArray, utf8)}'")
+    val utf8 = Charset.forName("UTF-8")
+    // start and end of PDF showText command
+    val strTj = "(".getBytes(utf8)
+    val endTj = ")Tj\n".getBytes(utf8)
+    
+    // for each redacted chunk
+    result.get.chunksToRedact(rItems).foreach { case (c, s) =>
+      log.debug(s"redact: c = $c")
+      val pc = c.parserContext
+      
+      // PDF moveText command
+      def Td(width: Float) = {
+        log.debug(s"Td: width = $width")
+        buf ++= f"$width%.1f 0.0 Td\n".getBytes(utf8)
+      }
+      
+      // PDF showText command
+      def Tj(s: String) = {
+        if (tdNeeded) {
+          Td(pc.font.getWidthPoint(textSoFar.toString, pc.fontSize))
+          textSoFar.clear
+          tdNeeded = false
+        }
+        log.debug(s"Tj: s = '$s'")
+        buf ++= strTj
+        buf ++= pc.font.convertToBytes(s)
+        buf ++= endTj
+      }
+      
+      // For PDF command [ ... ]TJ we get a chunk for every array element, but they all have the same ParserContext (that of the whole TJ),
+      // so we only want to copy the content preceding the TJ once!
+      if (pc.streamStart.toInt >= streamOffset) {
+        log.debug(s"redact: copy stream up to start of chunk to be redacted from $streamOffset to ${pc.streamStart.toInt}, continue from ${pc.streamEnd.toInt}")
+        buf ++= stream.slice(streamOffset, pc.streamStart.toInt)
+        buf += '\n' // copied portion of stream doesn't always end with this, hopefully an extra one won't hurt either here or at the start of the next PDF command
+        streamOffset = pc.streamEnd.toInt
+        textSoFar.clear
+        tdNeeded = false
+      }
+      
+      var textOffset = 0
+      // for each RedactItem  
+      s.sortBy(_.start).map { ri =>
+        if (ri.start == ri.end) ((c.text.length, c.text.length)) // no redaction for this chunk, copy it all
+        else (max(ri.start - c.textStart, 0), min(ri.end - c.textStart, c.text.length)) // convert segment text offsets from relative to start of page to relative to start of text in the chunk
+      }.foreach { case (redactStart, redactEnd) =>
+        log.debug(s"redact: c.text = ${c.text}, textOffset = $textOffset, redactStart = $redactStart, redactEnd = $redactEnd, textSoFar = $textSoFar")
+        if (redactStart > textOffset) {
+          val s = c.text.substring(textOffset, redactStart)
+          // log.debug(s"redact: write text before the redacted segment: '$s'")
+          Tj(s)
+        }
+        if (redactStart < c.text.length) {
+          tdNeeded = true
+//          sumWidthRedacted += pc.font.getWidthPoint(c.text.substring(redactStart, redactEnd), pc.fontSize) // TODO: ? start at 0 if abs then take off max, or redactStart if rel and take off sum
+//          log.debug(s"redact: something was redacted, sumWidthRedacted = $sumWidthRedacted") // so that blank space of the correct size is left for the redacted segment
+        }
+        textSoFar ++= c.text.substring(textOffset, redactEnd)
+        textOffset = redactEnd
+      }
+      if (textOffset < c.text.length) {
+        val s = c.text.substring(textOffset)
+        // log.debug(s"redact: write text after the last redacted segment: '$s'")
+        Tj(s)
+        
+//        log.debug(s"redact: undo previous moveTexts (Td) sumWidth = $sumWidth")
+//        buf ++= f"${-sumWidth}%.1f 0.0 Td\n".getBytes(utf8) // undo moveTexts (Td) so subsequent text isn't affected
+      }
+    }
+    log.debug(s"redact: copy remainder of stream from $streamOffset")
+    buf ++= stream.slice(streamOffset, stream.length)
     buf.toArray
   }
 

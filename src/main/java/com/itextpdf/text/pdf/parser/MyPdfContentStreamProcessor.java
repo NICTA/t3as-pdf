@@ -283,7 +283,7 @@ public class MyPdfContentStreamProcessor {
      * Returns the current graphics state.
      * @return  the graphics state
      */
-    private GraphicsState gs(){
+    protected GraphicsState gs(){
         return gsStack.peek();
     }
 

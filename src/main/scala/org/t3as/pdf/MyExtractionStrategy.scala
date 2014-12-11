@@ -27,17 +27,21 @@ import com.itextpdf.text.pdf.parser.LocationTextExtractionStrategy.TextChunk
 import org.slf4j.LoggerFactory
 import com.itextpdf.text.pdf.BaseFont
 
-/** Provide access to the byte offset into the content stream being parsed. */
-case class StreamOffset(start: Long, end: Long)
+/** Provide access to byte offsets into the content stream being parsed and current font. */
+case class ParserContext(streamStart: Long, streamEnd: Long, font: BaseFont, fontSize: Float)
 
-trait HasStreamOffset {
-  var getStreamOffset = () => StreamOffset(0L, 0L) // var set by parser
+/** page and text offsets with page of item to be redacted */
+case class RedactItem(page: Int, start: Int, end: Int)
+
+
+trait HasParserContext {
+  var parserContext = () => ParserContext(0L, 0L, BaseFont.createFont, 16.0f) // var set by parser
 }
 
 /** Representation of text chunks during parsing of the page, before we sort them by position on the page to figure out their ordering.
   * Modified from itext's LocationTextExtractionStrategy.TextChunk.  
   */
-case class ExtendedChunk(text: String, startLocation: Vector, endLocation: Vector, charSpaceWidth: Float, fontHeight: Float, streamOffset: StreamOffset) {
+case class ExtendedChunk(text: String, startLocation: Vector, endLocation: Vector, charSpaceWidth: Float, fontHeight: Float, parserContext: ParserContext) {
   import Vector._
   import ExtendedChunk._
   
@@ -84,33 +88,51 @@ object ExtendedChunk {
   }
 }
 
-/** Representation of text chunks after we know their their order on the page. */
-case class ResultChunk(text: String, streamOffset: Option[StreamOffset], textOffset: Int)
+/** Representation of text chunks after we know their their order on the page.
+ *  
+ *  For text extraction we need ResultChunks for extra spaces and new lines inferred from gaps between text segments,
+ *  but when regenerating PDF commands for redacted content we don't want to generate content from this inferred white space,
+ *  hence the `inferredWhiteSpace` flag.
+ *  
+ *  TODO: also store horizontal offsets in PDF units - we could use this to more accurately place the text around redacted sections.
+ */
+case class ResultChunk(text: String, textStart: Int, inferredWhiteSpace: Boolean, parserContext: ParserContext) {
+  def textEnd =  textStart + text.length
+  def intersects(r: RedactItem) = r.start < textEnd && r.end > textStart
+  def sameStreamStart(c: ResultChunk) = c.parserContext.streamStart == parserContext.streamStart 
+}
  
-/** Wrap an ordered sequence of ResultChunk, providing methods to combine all the chunks into a string and convert text offsets to stream offsets. */
+/** Wrap an ordered sequence of ResultChunk, providing methods to support text extraction and redaction. */
 case class MyResult(chunks: Seq[ResultChunk]) {
   private val log = LoggerFactory.getLogger(getClass)
 
   /** Concatenate text from all chunks to get the document text. */
   val text = chunks.iterator.map(_.text).mkString("")
 
-  /** Get StreamOffsets of chunks covering the text from start to end.
-    * @param start start offset into String returned by getText
-    * @param end end offset into String returned by getText
-    * @return sequence of StreamOffsets starting with the chunk containing the text at start and ending with the chunk containing the text at end
-    */
-  def redact1(start: Int, end: Int) = chunks.iterator.dropWhile(_.textOffset < start).takeWhile(_.textOffset < end).flatMap { c =>
-    log.debug(s"redact1: c = $c, text = ${text.substring(c.textOffset, c.textOffset + end - start)}")
-    c.streamOffset
+  /** Find chunks required for redaction.
+   * 
+   * The PDF operator '[ ... ]TJ' results in a separate chunk for each array element.
+   * Redaction replaces all the content for an operator, so if we redact one of these chunks we need to reproduce all the others.
+   * So we return a) chunks that intersect with `offsets` as well as b) chunks that result from the same PDF operator (sameStreamStart) as the a) chunks.
+   */
+  def chunksToRedact(offsets: Seq[RedactItem]) = {
+    val a = for {
+      c <- chunks if !c.inferredWhiteSpace
+      s = offsets.filter(c.intersects) if !s.isEmpty
+    } yield (c, s)
+    log.debug(s"chunksToRedact: a = ${a.map(_._1.text).mkString("|")}")
+    val setA = a.map(_._1).toSet
+    val setStreamStart = setA.map(_.parserContext.streamStart)
+    val noRedact = Seq(RedactItem(0, 0, 0))
+    val b = chunks.filter(c => !c.inferredWhiteSpace && setStreamStart.contains(c.parserContext.streamStart) && !setA.contains(c)).map((_, noRedact))
+    val r = (a ++ b).sortBy(_._1.textStart)
+    log.debug(s"chunksToRedact: r = ${r.map(_._1.text).mkString("|")}")
+    r
   }
-  
-  // Given Seq of text offsets, get corresponding sorted Seq of StreamOffsets 
-  def redact(offsets: Seq[(Int, Int)]) = offsets.foldLeft(Set(): Set[StreamOffset]) { (z, o) => z ++ redact1(o._1, o._2) }
-    .toSeq.sortBy(_.start)
 }
 
 /** Modified from: com.itextpdf.text.pdf.parser.LocationTextExtractionStrategy */
-class MyExtractionStrategy extends TextExtractionStrategy with HasStreamOffset {
+class MyExtractionStrategy extends TextExtractionStrategy with HasParserContext {
   private val log = LoggerFactory.getLogger(getClass)
 
   override def beginTextBlock = {}
@@ -124,11 +146,19 @@ class MyExtractionStrategy extends TextExtractionStrategy with HasStreamOffset {
    * TODO: Leif's pdf generated on OS X has spurious
    *   /TT4 1 Tf
    *   (!) Tj
-   * which generats "!" at line ends.
+   * which generates "!" at line ends.
    * The font used, in this case /TT4, has no /Encoding attribute, for which itext getEncoding returns "".
    * Also: /FirstChar = /LastChar = 33 ('!' as decimal)
    * Can't just skip text in a font with blank encoding though, because other PDFs (generated by me on linux) have blank font encoding for all their text.
-   * So I'm not sure if/how we should filter this spurious text.
+   * Encoding needs to be specified for Type1 (orig Adobe) fonts and Type3 fonts (outlines defined using PDF graphics primitives), but not for TrueType or Type0 (composite) fonts,
+   * so its normal that encoding wasn't specified here.
+   * So I'm not sure if/how we should filter this spurious text. Could look at size, stroke, fill attributes to see why it is invisible.
+   * Encoding needs to be specified for Type1 (orig Adobe) fonts and Type3 fonts (outlines defined using PDF graphics primitives), but not for TrueType or Type0 (composite) fonts,
+   * so its normal that encoding wasn't specified here.
+   * Maybe getTextRenderMode() == 3 for Invisible?
+   * 
+   * When the PDF contains '[ ... ]TJ' an array of text chunks each with their own offset, we get called for each array element with the same parserContext
+   * (which we could use to know we're on the same line).  
    */
   override def renderText(r: TextRenderInfo) = {
     import Vector.I2
@@ -138,7 +168,7 @@ class MyExtractionStrategy extends TextExtractionStrategy with HasStreamOffset {
       val b = r.getBaseline
       if (r.getRise != 0) b else b.transformBy(new Matrix(0, -r.getRise))
     }
-    chunks += ExtendedChunk(r.getText, b.getStartPoint, b.getEndPoint, r.getSingleSpaceWidth, fontHeight, getStreamOffset())
+    chunks += ExtendedChunk(r.getText, b.getStartPoint, b.getEndPoint, r.getSingleSpaceWidth, fontHeight, parserContext())
   }
 
   /** no-op, not interested in image events */
@@ -178,16 +208,16 @@ class MyExtractionStrategy extends TextExtractionStrategy with HasStreamOffset {
         if (chunk.sameLine(prevChunk)) {
           // we only insert a blank space if the trailing character of the previous string wasn't a space, and the leading character of the current string isn't a space
           if (needSpace(chunk, prevChunk)) {
-            buf += ResultChunk(" ", None, textOffset)
+            buf += ResultChunk(" ", textOffset, true, chunk.parserContext)
             textOffset += 1
           }
         } else {
           val vertSpace = if (needBlankLine(chunk, prevChunk)) "\n\n" else "\n"
-          buf += ResultChunk(vertSpace, None, textOffset)
+          buf += ResultChunk(vertSpace, textOffset, true, chunk.parserContext)
           textOffset += vertSpace.length
         }
       }
-      buf += ResultChunk(chunk.text, Some(chunk.streamOffset), textOffset)
+      buf += ResultChunk(chunk.text, textOffset, false, chunk.parserContext)
       textOffset += chunk.text.length
       prevChunk = chunk
     }

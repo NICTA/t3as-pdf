@@ -14,6 +14,8 @@ scalaVersion := "2.11.2"
 
 scalacOptions ++= Seq("-unchecked", "-deprecation", "-feature")
 
+EclipseKeys.withSource := true
+
 com.github.retronym.SbtOneJar.oneJarSettings
 
 mainClass in (Compile, run) := Some("org.t3as.pdf.Pdf")

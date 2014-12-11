@@ -20,19 +20,34 @@
  */
 package org.t3as.pdf
 
-import java.io.InputStream
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, InputStream}
 
 import scala.collection.mutable.ListBuffer
 
-import org.scalatest.{FlatSpec, Matchers}
+import org.scalatest.{Finders, FlatSpec, Matchers}
 
-import com.itextpdf.text.pdf.PdfReader
+import com.itextpdf.text.{Document, Paragraph}
+import com.itextpdf.text.pdf.{PdfReader, PdfWriter}
 import com.itextpdf.text.pdf.parser.PdfReaderContentParser
 
 import resource.managed
 
 object ExtractTest {
   
+  /**
+   * Create a small PDF document
+   * @return PDF
+   */
+  def create: Array[Byte] = {
+    val b = new ByteArrayOutputStream
+    val d = new Document
+    PdfWriter.getInstance(d, b)
+    d.open
+    d.add(new Paragraph(Pdf.text))
+    d.close
+    b.toByteArray
+  }
+
   /**
    * Extract text and close is.
    * @param is PDF content
@@ -52,11 +67,14 @@ object ExtractTest {
 }
 
 class ExtractTest extends FlatSpec with Matchers {
-  import ExtractTest.extract
-  
-  // val log = LoggerFactory.getLogger(getClass)
+  import ExtractTest._
 
-  "MyExtractionStrategy" should "extract text" in {
+  "MyExtractionStrategy" should "extract text from created PDF" in {
+    val pages = extract(new ByteArrayInputStream(create))
+    pages(0).replace('\n', ' ') should be(Pdf.text.replace('\n', ' '))
+  }
+  
+  it should "extract text from SampleDoc.pdf" in {
     val pages = extract(getClass.getClassLoader.getResourceAsStream("SampleDoc.pdf"))
     pages(0).contains("Mark Kenny Chief Political Correspondent") should be(true)
   }

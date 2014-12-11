@@ -60,8 +60,8 @@ In the text below:
 #### TextExtractionStrategy (a listener for a StreamProcessor)
 **itext Java**: [`com.itextpdf.text.pdf.parser.TextExtractionStrategy`](http://api.itextpdf.com/itext/com/itextpdf/text/pdf/parser/TextExtractionStrategy.html)
 <br>tracks coordinate transformations to calculate where text appears on the page
-text chunks with close to the same baseline are assumed to be on the same line
-a gap from the end of previous text is assumed to be a space
+ - text chunks with close to the same baseline are assumed to be on the same line
+ - a gap from the end of previous text is assumed to be a space
 
 **new Scala**: [`org.t3as.pdf.MyExtractionStrategy`](https://github.com/NICTA/t3as-pdf/blob/master/src/main/scala/org/t3as/pdf/MyExtractionStrategy.scala) extends TextExtractionStrategy
  - improves text placement (float rather than int coords improves same line detection  - handles bullet point placement
