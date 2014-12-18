@@ -32,6 +32,8 @@ import com.itextpdf.text.pdf.parser.PdfReaderContentParser
 import resource.managed
 import scopt.Read
 import com.itextpdf.text.pdf.parser.LocationTextExtractionStrategy
+import com.itextpdf.text.pdf.PdfContentByte
+import com.itextpdf.text.PageSize
 
 /**
  * CLI for PDF operations.
@@ -57,6 +59,7 @@ object Pdf {
   case class Config(
     input: Option[File] = None,
     create: Option[File] = None,
+    createWithRectangle: Boolean = false,
     dump: Boolean = false,
     parse: Boolean = false,
     extract: Boolean = false,
@@ -75,6 +78,10 @@ object Pdf {
     opt[File]("create") valueName("<output file>") action { (x, c) =>
       c.copy(create = Some(x))
     } text(s"create a very simple PDF file, default ${defValue.create}")
+
+    opt[Unit]("rectangle") action { (_, c) =>
+      c.copy(createWithRectangle = true)
+    } text(s"add filled rectangle to created PDF, default ${defValue.createWithRectangle}")
 
     opt[Unit]("dump") action { (_, c) =>
       c.copy(dump = true)
@@ -101,7 +108,7 @@ object Pdf {
 
   def main(args: Array[String]): Unit = {
     parser.parse(args, Config()) foreach { c =>
-      c.create foreach (create)
+      c.create foreach (dst => create(dst, c.createWithRectangle))
       c.input foreach { src =>
         if (c.dump) dump(src)
         if (c.parse) parse(src)
@@ -116,13 +123,24 @@ object Pdf {
 government struggling to explain unpopular policies and his premiership facing its keenest test since he won the
 2013 election in a landslide."""
   
-  def create(out: File) = {
+  def create(out: File, withRectangle: Boolean = false) = {
     log.debug(s"create: out = $out")
     val d = new Document
-    PdfWriter.getInstance(d, new FileOutputStream(out))
+    val w = PdfWriter.getInstance(d, new FileOutputStream(out))
     d.open
     d.add(new Paragraph(text))
+    if (withRectangle) addRectangle(w.getDirectContentUnder)
     d.close
+  }
+  
+  def addRectangle(c: PdfContentByte) = {
+    c.saveState
+    c.setRGBColorFill(0xFF, 0xD7, 0x00)
+    val w = PageSize.A4.getWidth
+    val h = PageSize.A4.getHeight
+    c.rectangle(0.0f, h*2.0f/3.0f, w/3.0f, h) // left, bottom, right, top
+    c.fill
+    c.restoreState
   }
 
   /** Dump stream instances from Xref table

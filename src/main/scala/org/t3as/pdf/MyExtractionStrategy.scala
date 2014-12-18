@@ -41,7 +41,7 @@ trait HasParserContext {
 /** Representation of text chunks during parsing of the page, before we sort them by position on the page to figure out their ordering.
   * Modified from itext's LocationTextExtractionStrategy.TextChunk.  
   */
-case class ExtendedChunk(text: String, startLocation: Vector, endLocation: Vector, charSpaceWidth: Float, fontHeight: Float, parserContext: ParserContext) {
+case class ExtendedChunk(text: String, startLocation: Vector, endLocation: Vector, charSpaceWidth: Float, fontY: Float, fontHeight: Float, parserContext: ParserContext) {
   import Vector._
   import ExtendedChunk._
   
@@ -96,10 +96,10 @@ object ExtendedChunk {
  *  
  *  TODO: also store horizontal offsets in PDF units - we could use this to more accurately place the text around redacted sections.
  */
-case class ResultChunk(text: String, textStart: Int, inferredWhiteSpace: Boolean, parserContext: ParserContext) {
+case class ResultChunk(text: String, textStart: Int, inferredWhiteSpace: Boolean, startLocation: Vector, endLocation: Vector, fontY: Float, fontHeight: Float, parserContext: ParserContext) {
   def textEnd =  textStart + text.length
   def intersects(r: RedactItem) = r.start < textEnd && r.end > textStart
-  def sameStreamStart(c: ResultChunk) = c.parserContext.streamStart == parserContext.streamStart 
+  def sameStreamStart(c: ResultChunk) = c.parserContext.streamStart == parserContext.streamStart
 }
  
 /** Wrap an ordered sequence of ResultChunk, providing methods to support text extraction and redaction. */
@@ -162,13 +162,14 @@ class MyExtractionStrategy extends TextExtractionStrategy with HasParserContext 
    */
   override def renderText(r: TextRenderInfo) = {
     import Vector.I2
-    val fontHeight = r.getAscentLine.getStartPoint.get(I2) - r.getDescentLine.getStartPoint.get(I2)
+    val fontY = r.getDescentLine.getStartPoint.get(I2)
+    val fontHeight = r.getAscentLine.getStartPoint.get(I2) - fontY
     // remove the rise from the baseline - we do this because the text from a super/subscript render operation should probably be considered as part of the baseline of the text 
     val b = {
       val b = r.getBaseline
       if (r.getRise != 0) b else b.transformBy(new Matrix(0, -r.getRise))
     }
-    chunks += ExtendedChunk(r.getText, b.getStartPoint, b.getEndPoint, r.getSingleSpaceWidth, fontHeight, parserContext())
+    chunks += ExtendedChunk(r.getText, b.getStartPoint, b.getEndPoint, r.getSingleSpaceWidth, fontY, fontHeight, parserContext())
   }
 
   /** no-op, not interested in image events */
@@ -185,8 +186,7 @@ class MyExtractionStrategy extends TextExtractionStrategy with HasParserContext 
     */
   def needSpace(c: ExtendedChunk, prev: ExtendedChunk) = {
     val d = c.distParallelStart - prev.distParallelEnd
-    val width = c.charSpaceWidth
-    !c.text.startsWith(" ") && !prev.text.endsWith(" ") && (d > width / 2.0f || d < -width)
+    !c.text.startsWith(" ") && !prev.text.endsWith(" ") && (d > c.charSpaceWidth / 2.0f || d < -c.charSpaceWidth)
   }
   
   /** Determines whether vertical whitespace (2 new lines instead of one) is required.
@@ -203,23 +203,23 @@ class MyExtractionStrategy extends TextExtractionStrategy with HasParserContext 
     val buf = new ListBuffer[ResultChunk]
     var prevChunk: ExtendedChunk = null
     var textOffset: Int = 0
-    for (chunk <- chunks.sortWith(ExtendedChunk.lt)) {
+    for (c <- chunks.sortWith(ExtendedChunk.lt)) {
       if (prevChunk != null) {
-        if (chunk.sameLine(prevChunk)) {
+        if (c.sameLine(prevChunk)) {
           // we only insert a blank space if the trailing character of the previous string wasn't a space, and the leading character of the current string isn't a space
-          if (needSpace(chunk, prevChunk)) {
-            buf += ResultChunk(" ", textOffset, true, chunk.parserContext)
+          if (needSpace(c, prevChunk)) {
+            buf += ResultChunk(" ", textOffset, true, c.startLocation, c.endLocation, c.fontY, c.fontHeight, c.parserContext)
             textOffset += 1
           }
         } else {
-          val vertSpace = if (needBlankLine(chunk, prevChunk)) "\n\n" else "\n"
-          buf += ResultChunk(vertSpace, textOffset, true, chunk.parserContext)
+          val vertSpace = if (needBlankLine(c, prevChunk)) "\n\n" else "\n"
+          buf += ResultChunk(vertSpace, textOffset, true, c.startLocation, c.endLocation, c.fontY, c.fontHeight, c.parserContext)
           textOffset += vertSpace.length
         }
       }
-      buf += ResultChunk(chunk.text, textOffset, false, chunk.parserContext)
-      textOffset += chunk.text.length
-      prevChunk = chunk
+      buf += ResultChunk(c.text, textOffset, false, c.startLocation, c.endLocation, c.fontY, c.fontHeight, c.parserContext)
+      textOffset += c.text.length
+      prevChunk = c
     }
     MyResult(buf.toSeq)
   }
