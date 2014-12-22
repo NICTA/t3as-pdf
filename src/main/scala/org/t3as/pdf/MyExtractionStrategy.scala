@@ -30,8 +30,8 @@ import com.itextpdf.text.pdf.BaseFont
 /** Provide access to byte offsets into the content stream being parsed and current font. */
 case class ParserContext(streamStart: Long, streamEnd: Long, font: BaseFont, fontSize: Float)
 
-/** page and text offsets with page of item to be redacted */
-case class RedactItem(page: Int, start: Int, end: Int)
+/** page and text offsets for item to be redacted */
+case class RedactItem(page: Int, start: Int, end: Int, reason: String)
 
 
 trait HasParserContext {
@@ -123,7 +123,7 @@ case class MyResult(chunks: Seq[ResultChunk]) {
     log.debug(s"chunksToRedact: a = ${a.map(_._1.text).mkString("|")}")
     val setA = a.map(_._1).toSet
     val setStreamStart = setA.map(_.parserContext.streamStart)
-    val noRedact = Seq(RedactItem(0, 0, 0))
+    val noRedact = Seq(RedactItem(0, 0, 0, ""))
     val b = chunks.filter(c => !c.inferredWhiteSpace && setStreamStart.contains(c.parserContext.streamStart) && !setA.contains(c)).map((_, noRedact))
     val r = (a ++ b).sortBy(_._1.textStart)
     log.debug(s"chunksToRedact: r = ${r.map(_._1.text).mkString("|")}")

@@ -25,9 +25,9 @@ import scala.collection.JavaConversions.asScalaSet
 import scala.collection.mutable.ListBuffer
 import scala.language.postfixOps
 import org.slf4j.LoggerFactory
-import com.itextpdf.text.{Document, Paragraph}
+import com.itextpdf.text.{Document, Paragraph, FontFactory}
 import com.itextpdf.text.io.RandomAccessSourceFactory
-import com.itextpdf.text.pdf.{PRStream, PRTokeniser, PdfName, PdfReader, PdfWriter, RandomAccessFileOrArray}
+import com.itextpdf.text.pdf.{PRStream, PRTokeniser, PdfName, PdfReader, PdfWriter, RandomAccessFileOrArray, PdfDictionary, PRIndirectReference}
 import com.itextpdf.text.pdf.parser.PdfReaderContentParser
 import resource.managed
 import scopt.Read
@@ -52,7 +52,7 @@ object Pdf {
   val redactItemRe = """\( *([0-9]+) *, *([0-9]+) *, *([0-9]+) *\)""".r
   def toRedactItem(s: String) = {
     val redactItemRe(page, str, end) = s
-    RedactItem(page.toInt, str.toInt, end.toInt)
+    RedactItem(page.toInt, str.toInt, end.toInt, s"reason${str}-${end}")
   }
   implicit val reductItemRead: Read[RedactItem] = Read.reads(toRedactItem)
 
@@ -129,7 +129,9 @@ government struggling to explain unpopular policies and his premiership facing i
     val w = PdfWriter.getInstance(d, new FileOutputStream(out))
     d.open
     d.add(new Paragraph(text))
-    if (withRectangle) addRectangle(w.getDirectContentUnder)
+    if (withRectangle) {
+      addRectangle(w.getDirectContentUnder)
+    }
     d.close
   }
   
@@ -142,7 +144,7 @@ government struggling to explain unpopular policies and his premiership facing i
     c.fill
     c.restoreState
   }
-
+  
   /** Dump stream instances from Xref table
     */
   def dump(src: File) {
@@ -194,12 +196,40 @@ government struggling to explain unpopular policies and his premiership facing i
     for {
       _ <- managed(doc)
       r <- managed(new PdfReader(src.getPath))
-      i <- 1 to r.getNumberOfPages
+      fontRef = addFont(r)
+      baseFont = FontFactory.getFont(FontFactory.HELVETICA).getBaseFont
+      pageNum <- 1 to r.getNumberOfPages
     } {
-      log.debug(s"redact: page $i")
-      val page = pdfCopy.getImportedPage(r, i)
-      pdfCopy.addPage(page)
+      log.debug(s"redact: page $pageNum")
+      val fontName = addFontToPage(r, pageNum, fontRef)
+      val page = pdfCopy.getImportedPage(r, pageNum)
+      pdfCopy.addPage(page, fontName, baseFont)
     }
+  }
+
+  /**
+   * Add built-in Helvetica font (to write redaction reason) as an indirect object (add to xref table and return a ref to it).
+   * This is a once per document action. Use `addFontToPage` to add the returned ref to the font resources for a page. 
+   */
+  def addFont(r: PdfReader): PRIndirectReference = {
+    val dict = new PdfDictionary(PdfName.FONT)
+    dict.put(PdfName.BASEFONT, PdfName.HELVETICA)
+    dict.put(PdfName.SUBTYPE, PdfName.TYPE1)
+    dict.put(PdfName.ENCODING, PdfName.WIN_ANSI_ENCODING)
+    r.addPdfObject(dict)
+  }
+  
+  /**
+   * Add ref (e.g. to a font) to the font resources for a page.
+   * @return the PdfName of the font to be used in the content stream e.g. PdfName("F3") for the 3rd font in the page's font resources.
+   */
+  def addFontToPage(r: PdfReader, pageNum: Int, ref: PRIndirectReference) = {
+    val res = r.getPageResources(pageNum)
+    val fonts = res.getAsDict(PdfName.FONT)
+    val name = new PdfName("F" + (fonts.size + 1))
+    fonts.put(name, ref)
+    log.debug(s"addFontToPage: name = $name, keys = ${fonts.getKeys.toSet}")
+    name
   }
 
 }

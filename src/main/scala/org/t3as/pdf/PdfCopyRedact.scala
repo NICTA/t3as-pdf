@@ -21,21 +21,17 @@
 package org.t3as.pdf
 
 import java.io.OutputStream
+import java.lang.Math.{ max, min }
 import java.nio.charset.Charset
 import scala.collection.JavaConversions.asScalaSet
 import scala.collection.mutable.ArrayBuffer
-import scala.util.control.NonFatal
+import scala.util.Try
 import org.slf4j.LoggerFactory
 import com.itextpdf.text.Document
-import com.itextpdf.text.pdf.{ MyPRStream, PRIndirectReference, PRStream, PdfArray, PdfCopy, PdfDictionary, PdfIndirectReference, PdfName, PdfReader }
+import com.itextpdf.text.pdf.{ BaseFont, MyPRStream, PRStream, PdfCopy, PdfDictionary, PdfImportedPage, PdfName, PdfReader }
 import com.itextpdf.text.pdf.parser.ContentByteUtils
-import com.itextpdf.text.pdf.PdfDocument
-import com.itextpdf.text.pdf.PdfDocument.PdfInfo
-import com.itextpdf.text.pdf.PdfAnnotation
-import scala.util.Try
-import com.itextpdf.text.Font
-import com.itextpdf.text.pdf.BaseFont
-import com.itextpdf.text.pdf.parser.Vector, Vector.{I1, I2}
+import com.itextpdf.text.pdf.parser.Vector.I1
+import scala.collection.mutable.ListBuffer
 
 class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactItem]) extends PdfCopy(doc, out) {
   private val log = LoggerFactory.getLogger(getClass)
@@ -43,7 +39,9 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
   private var origRawContent: Option[Array[Byte]] = None
   private var result: Option[MyResult] = None
   private var pageNum = 0
-  
+  private var fontName: PdfName = null
+  private var baseFont: BaseFont = null
+
   pdf.addCreator("Redact v0.1 ©2014 NICTA (AGPL)")
 
   override def getImportedPage(r: PdfReader, pageNum: Int) = {
@@ -59,12 +57,18 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
     super.getImportedPage(r, pageNum)
   }
 
-//  override protected def copyIndirect(in: PRIndirectReference, keepStruct: Boolean, directRootKids: Boolean): PdfIndirectReference = {
-//    log.debug(s"copyIndirect: start: in $in")
-//    val x = super.copyIndirect(in, keepStruct, directRootKids)
-//    log.debug(s"copyIndirect: end:   in $in")
-//    x
-//  }
+  def addPage(iPage: PdfImportedPage, fontName: PdfName, baseFont: BaseFont) = {
+    this.fontName = fontName
+    this.baseFont = baseFont
+    super.addPage(iPage)
+  }
+
+  //  override protected def copyIndirect(in: PRIndirectReference, keepStruct: Boolean, directRootKids: Boolean): PdfIndirectReference = {
+  //    log.debug(s"copyIndirect: start: in $in")
+  //    val x = super.copyIndirect(in, keepStruct, directRootKids)
+  //    log.debug(s"copyIndirect: end:   in $in")
+  //    x
+  //  }
 
   /** Copy the dictionary, but if type is ANNOT (contains stick notes, link URI's to email addresses, in/external links etc.)
     * then replace it with an empty dictionary.
@@ -72,22 +76,22 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
   override protected def copyDictionary(in: PdfDictionary, keepStruct: Boolean, directRootKids: Boolean): PdfDictionary = {
     val typ = PdfReader.getPdfObjectRelease(in.get(PdfName.TYPE))
     if (PdfName.ANNOT == typ) {
-      log.debug(s"copyDictionary: skipping: in $in")
+      log.debug(s"copyDictionary: skipping: typ = $typ, in = $in")
       new PdfDictionary()
     } else {
-      log.debug(s"copyDictionary: start: in $in")
-      val x = super.copyDictionary(in, keepStruct, directRootKids)
-      log.debug(s"copyDictionary: end:   in $in")
-      x
+      log.debug(s"copyDictionary: start: typ = $typ, in $in")
+      val d = super.copyDictionary(in, keepStruct, directRootKids)
+      log.debug(s"copyDictionary: end:   typ = $typ, in $in")
+      d
     }
   }
 
-//  override protected def copyArray(in: PdfArray, keepStruct: Boolean, directRootKids: Boolean): PdfArray = {
-//    log.debug(s"copyArray: start: in $in")
-//    val x = super.copyArray(in, keepStruct, directRootKids)
-//    log.debug(s"copyArray: end:   in $in")
-//    x
-//  }
+  //  override protected def copyArray(in: PdfArray, keepStruct: Boolean, directRootKids: Boolean): PdfArray = {
+  //    log.debug(s"copyArray: start: in $in")
+  //    val x = super.copyArray(in, keepStruct, directRootKids)
+  //    log.debug(s"copyArray: end:   in $in")
+  //    x
+  //  }
 
   /** Copy the stream, performing redaction only if it's the page's content stream */
   override protected def copyStream(in: PRStream): PRStream = {
@@ -122,53 +126,14 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
   }
 
   def redact(stream: Array[Byte], rItems: Seq[RedactItem]) = {
-    import Math.{min, max}
+    import PdfBuilder._
+    import Math.{ min, max }
 
-    val buf = new ArrayBuffer[Byte]
+    val bldr = new PdfBuilder
 
-    // PDF commands
-    
-    val utf8 = Charset.forName("UTF-8")
-    def u(s: String) = s.getBytes(utf8)
-    def w(b: Array[Byte]) = buf ++= b
-    
-    val uSave = u("q\n")
-    def save = w(uSave)
-    
-    val uRestore = u("Q\n")
-    def restore = w(uRestore)
-    
-    def moveText(width: Float) = {
-      log.debug(s"redact.moveText: width = $width")
-      w(u(f"$width%.1f 0.0 Td\n"))
-    }
-      
-    val uSTStr = u("(")
-    val uSTEnd = u(")Tj\n")
-    def showText(s: String, f: BaseFont) = {
-      log.debug(s"redact.showText: s = '$s'")
-      w(uSTStr)
-      w(f.convertToBytes(s))
-      w(uSTEnd)
-    }
-    
-    case class RGB(red: Float, green: Float, blue: Float)
-    def rgb(c: RGB) = w(u(f"${c.red}%.5f ${c.green}%.5f ${c.blue}%.5f rg\n"))
-    
-    case class Rect(x: Float, y: Float, width: Float, height: Float)
-    def rect(r: Rect) = w(u(f"${r.x}%.2f ${r.y}%.2f ${r.width}%.2f ${r.height}%.2f re\n"))
-    
-    val uFill = u("f\n")
-    def fill = w(uFill)
-    
-    def rectFill(r: Rect, c: RGB) = {
-      save
-      rgb(c)
-      rect(r)
-      fill
-      restore
-    }
-    
+    case class RectReason(rect: Rect, reason: String)
+    val rectReasons = ListBuffer[RectReason]()
+
     // width in points of string in current font (may be in trouble if 1 user space unit != 1 point)
     def widthPoint(t: String, pc: ParserContext) = {
       val w = pc.font.getWidthPoint(t, pc.fontSize)
@@ -176,10 +141,10 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
       w
     }
 
-    val black = RGB(0.0f, 0.0f, 0.0f)
-    // just to test - drawing rectangle first puts it behind the text written afterwards
-    // rectFill(Rect(290f, 728.3f, 30f,  10f), black)
-    
+    val mauve = RGB(191f / 255f, 170f / 255f, 255f / 255f)
+    val grey = RGB(0.3f, 0.3f, 0.3f)
+    // val black = RGB(0.0f, 0.0f, 0.0f)
+
     var streamOffset = 0
     val redactedSoFar = new StringBuilder
     var needMoveText = false
@@ -187,85 +152,98 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
     var textXOrigin: Float = 0.0f
     var sumDelta: Float = 0.0f
 
-    def moveShowText(s: String, c: ResultChunk) = {
+    def moveShowText(text: String, reason: String, c: ResultChunk) = {
       if (needMoveText) {
         // draw rect
         val rectWidth = widthPoint(redactedSoFar.toString, c.parserContext)
         val r = Rect(rectX, c.fontY, rectWidth, c.fontHeight)
         log.debug(s"redact.moveShowText: r = $r")
-        rectFill(r, black)
+        rectReasons += RectReason(r, reason)
         val delta = rectX + rectWidth - textXOrigin
-        moveText(delta)
+        bldr.moveText(delta)
         sumDelta += delta
         textXOrigin += delta
         redactedSoFar.clear
         needMoveText = false
       }
-      if (!s.isEmpty) showText(s, c.parserContext.font)
+      if (!text.isEmpty) bldr.showText(text, c.parserContext.font)
     }
-      
+
     // for each redacted chunk
     var prevChunk: ResultChunk = null
-    result.get.chunksToRedact(rItems).foreach { case (c, redactItems) =>
-      log.debug(s"redact: c = $c")
-      val pc = c.parserContext
-      
-      // For PDF command [ ... ]TJ we get a chunk for every array element, but they all have the same ParserContext (that of the whole TJ),
-      // so we only want to copy the content preceding the TJ once!
-      if (pc.streamStart.toInt >= streamOffset) {
-        if (needMoveText) moveShowText("", prevChunk) // before start of new line draw rectangle for redacted text at the end of the previous line
-        if (sumDelta > 0.0001f) moveText(-sumDelta)
-        
-        log.debug(s"redact: copy stream up to start of chunk to be redacted from $streamOffset to ${pc.streamStart.toInt}, continue from ${pc.streamEnd.toInt}")
-        buf ++= stream.slice(streamOffset, pc.streamStart.toInt)
-        buf += '\n' // copied portion of stream doesn't always end with this, no harm done by an extra one
-        streamOffset = pc.streamEnd.toInt
+    var prevRedactItem: RedactItem = RedactItem(0, 0, 0, "")
+    result.get.chunksToRedact(rItems).foreach {
+      case (c, redactItems) =>
+        log.debug(s"redact: c = $c")
+        val pc = c.parserContext
 
-        redactedSoFar.clear
-        needMoveText = false
-        textXOrigin = c.startLocation.get(I1)
-        sumDelta = 0.0f
-      }
-      
-      var textOffset = 0
-      // for each RedactItem  
-      redactItems.sortBy(_.start).map { ri =>
-        // convert segment text offsets from relative to start of page to relative to start of text in the chunk
-        if (ri.start == ri.end) ((c.text.length, c.text.length)) // no redaction for this chunk, copy it all
-        else (max(ri.start - c.textStart, 0), min(ri.end - c.textStart, c.text.length))
-      }.foreach { case (redactStart, redactEnd) =>
-        log.debug(s"redact: c.text = ${c.text}, textOffset = $textOffset, redactStart = $redactStart, redactEnd = $redactEnd, redactedSoFar = $redactedSoFar")
-        if (redactStart > textOffset) {
-          val s = c.text.substring(textOffset, redactStart)
-          log.debug(s"redact: write text: '$s'")
-          moveShowText(s, c)
+        // For PDF command [ ... ]TJ we get a chunk for every array element, but they all have the same ParserContext (that of the whole TJ),
+        // so we only want to copy the content preceding the TJ once!
+        if (pc.streamStart.toInt >= streamOffset) {
+          moveShowText("", prevRedactItem.reason, prevChunk) // before start of new line draw rectangle for redacted text at the end of the previous line
+          if (sumDelta > 0.0001f) bldr.moveText(-sumDelta)
+
+          log.debug(s"redact: copy stream up to start of chunk to be redacted from $streamOffset to ${pc.streamStart.toInt}, continue from ${pc.streamEnd.toInt}")
+          bldr.w(stream.slice(streamOffset, pc.streamStart.toInt))
+          bldr.newLine // copied portion of stream doesn't always end with this and no harm done by an extra one
+          streamOffset = pc.streamEnd.toInt
+
+          redactedSoFar.clear
+          needMoveText = false
+          textXOrigin = c.startLocation.get(I1)
+          sumDelta = 0.0f
         }
-        if (redactStart < c.text.length) {
-          if (!needMoveText) {
-            rectX = c.startLocation.get(I1) + widthPoint(c.text.substring(0, redactStart), c.parserContext)
-            needMoveText = true
-          }
-          redactedSoFar ++= c.text.substring(redactStart, redactEnd)
+
+        var textOffset = 0
+        // for each RedactItem  
+        redactItems.sortBy(_.start).map { ri =>
+          // convert segment text offsets from relative to start of page to relative to start of text in the chunk
+          if (ri.start == ri.end) (c.text.length, c.text.length, ri) // no redaction for this chunk, copy it all
+          else (max(ri.start - c.textStart, 0), min(ri.end - c.textStart, c.text.length), ri)
+        }.foreach {
+          case (redactStart, redactEnd, ri) =>
+            log.debug(s"redact: c.text = ${c.text}, textOffset = $textOffset, redactStart = $redactStart, redactEnd = $redactEnd, redactedSoFar = $redactedSoFar")
+            if (redactStart > textOffset) {
+              val s = c.text.substring(textOffset, redactStart)
+              log.debug(s"redact: write text: '$s'")
+              moveShowText(s, ri.reason, c)
+            }
+            if (redactStart < c.text.length) {
+              if (!needMoveText) {
+                rectX = c.startLocation.get(I1) + widthPoint(c.text.substring(0, redactStart), c.parserContext)
+                needMoveText = true
+              }
+              redactedSoFar ++= c.text.substring(redactStart, redactEnd)
+            }
+            textOffset = redactEnd
+            prevRedactItem = ri
         }
-        textOffset = redactEnd
-      }
-      if (textOffset < c.text.length) {
-        val s = c.text.substring(textOffset)
-        log.debug(s"redact: write remaining text: '$s'")
-        moveShowText(s, c)
-      }
-      // if s is empty we may still need to draw a rectangle representing redacted text at the end of the line
-      // case I'm looking at is short chunks, mostly one per char, so for each chunk we have one RedactItem(0, 1)
-      // and we're redacting multiple char's at the end of the line
-      // Without the if above, we're writing a separate rectangle for each char here.
-      // Can we delay a bit and write one rectangle for the sequence of redacted chars?
-      // That was the idea behind redactedSoFar.
-      prevChunk = c
+        if (textOffset < c.text.length) {
+          val s = c.text.substring(textOffset)
+          log.debug(s"redact: write remaining text: '$s'")
+          moveShowText(s, prevRedactItem.reason, c)
+        }
+        // Consider case of redacting multiple short chunks, mostly one per char, at the end of a line.
+        // To avoid writing a separate rectangle for each chunk here we delay until we hit the next line
+        // and then write one rectangle for the sequence of chunks.
+        // That was the idea behind redactedSoFar. Is that still needed?
+        prevChunk = c
     }
-    if (sumDelta > 0.0001f) moveText(-sumDelta)
+    moveShowText("", prevRedactItem.reason, prevChunk) // before remainder of stream draw rectangle for redacted text at the end of the previous line
+    if (sumDelta > 0.0001f) bldr.moveText(-sumDelta)
+    
     log.debug(s"redact: copy remainder of stream from $streamOffset")
-    buf ++= stream.slice(streamOffset, stream.length)
-    buf.toArray
+    bldr.w(stream.slice(streamOffset, stream.length))
+
+    bldr.newLine
+    for (r <- rectReasons) {
+      bldr.save
+        .rgb(mauve).rect(r.rect).fill.clip
+        .rgb(grey).beginText.moveText(r.rect.x + 2.0f, r.rect.y + 2.0f).fontSize(fontName, r.rect.height * 3.0f / 4.0f).showText(r.reason, baseFont).endText
+        .restore
+    }
+
+    bldr.bytes
   }
 
 }
