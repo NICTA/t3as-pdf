@@ -132,6 +132,8 @@ public class MyPdfContentStreamProcessor {
      * @since 5.0.2
      */
     private final Stack<MarkedContentInfo> markedContentStack = new Stack<MarkedContentInfo>();
+    
+    private PdfName fontResourceName = null;
 
     /**
      * Creates a new PDF Content Stream Processor that will send it's output to the
@@ -146,6 +148,17 @@ public class MyPdfContentStreamProcessor {
         xobjectDoHandlers = new HashMap<PdfName, MyXObjectDoHandler>();
         populateXObjectDoHandlers();
         reset();
+    }
+    
+    private void setFontResourceName(PdfName fontResourceName) {
+        this.fontResourceName = fontResourceName;
+    }
+
+    /**
+     * @return resource name for the current font set by the most recent SetTextFont (Tf) command.
+     */
+    protected PdfName getFontResourceName() {
+        return this.fontResourceName;
     }
 
     private void populateXObjectDoHandlers(){
@@ -269,6 +282,7 @@ public class MyPdfContentStreamProcessor {
         textMatrix = null;
         textLineMatrix = null;
         resources = new ResourceDictionary();
+        fontResourceName = null;
     }
     
     protected void push(PdfDictionary r) {
@@ -357,10 +371,6 @@ public class MyPdfContentStreamProcessor {
 
         textMatrix = new Matrix(renderInfo.getUnscaledWidth(), 0).multiply(textMatrix);
     }
-
-
-
-
 
     /**
      * Displays an XObject using the registered handler for this XObject's subtype
@@ -482,18 +492,15 @@ public class MyPdfContentStreamProcessor {
     private static class ShowTextArray implements MyContentOperator{
         public void invoke(MyPdfContentStreamProcessor processor, PdfLiteral operator, ArrayList<PdfObject> operands) {
             PdfArray array = (PdfArray)operands.get(0);
-            float tj = 0;
             for (Iterator<PdfObject> i = array.listIterator(); i.hasNext(); ) {
                 PdfObject entryObj = i.next();
                 if (entryObj instanceof PdfString){
                     processor.displayPdfString((PdfString)entryObj);
-                    tj = 0;
                 } else {
-                    tj = ((PdfNumber)entryObj).floatValue();
+                    float tj = ((PdfNumber)entryObj).floatValue();
                     processor.applyTextAdjust(tj);
                 }
             }
-
         }
     }
 
@@ -645,7 +652,7 @@ public class MyPdfContentStreamProcessor {
 
             processor.gs().font = font;
             processor.gs().fontSize = size;
-
+            processor.setFontResourceName(fontResourceName);
         }
     }
 

@@ -30,8 +30,9 @@ import org.slf4j.LoggerFactory
 import com.itextpdf.text.Document
 import com.itextpdf.text.pdf.{ BaseFont, MyPRStream, PRStream, PdfCopy, PdfDictionary, PdfImportedPage, PdfName, PdfReader }
 import com.itextpdf.text.pdf.parser.ContentByteUtils
-import com.itextpdf.text.pdf.parser.Vector.I1
+import com.itextpdf.text.pdf.parser.Vector.{I1, I2}
 import scala.collection.mutable.ListBuffer
+import Math.{ min, max, abs }
 
 class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactItem]) extends PdfCopy(doc, out) {
   private val log = LoggerFactory.getLogger(getClass)
@@ -70,7 +71,7 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
   //    x
   //  }
 
-  /** Copy the dictionary, but if type is ANNOT (contains stick notes, link URI's to email addresses, in/external links etc.)
+  /** Copy the dictionary, but if type is ANNOT (contains sticky notes, link URI's to email addresses, in/external links etc.)
     * then replace it with an empty dictionary.
     */
   override protected def copyDictionary(in: PdfDictionary, keepStruct: Boolean, directRootKids: Boolean): PdfDictionary = {
@@ -105,7 +106,7 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
       // Try might catch: com.itextpdf.text.exceptions.UnsupportedPdfException: The filter /DCTDecode is not supported.
       // This is an image filter and the surrounding if should limit this code to the main content stream for the page (containing text), so it shouldn't happen.
       tbytes foreach { bytes => // success case
-        s.setData(redact(bytes, redactItems.filter(_.page == pageNum)), true) // deflates and sets `bytes` for MyPRStream.toPdf to use
+        s.setData(redact(bytes, result.get, redactItems.filter(_.page == pageNum)), true) // deflates and sets `bytes` for MyPRStream.toPdf to use
       }
       if (tbytes.isFailure) tbytes.failed.foreach(e => log.warn("Can't decode stream", e))
       // Try.transform is more compact, but we don't want the same handling for exceptions from decodeBytes() and redact() 
@@ -125,125 +126,194 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
     s
   }
 
-  def redact(stream: Array[Byte], rItems: Seq[RedactItem]) = {
+  def redact(stream: Array[Byte], rslt: MyResult, rItems: Seq[RedactItem]) = {
     import PdfBuilder._
-    import Math.{ min, max }
 
     val bldr = new PdfBuilder
 
-    case class RectReason(rect: Rect, reason: String)
-    val rectReasons = ListBuffer[RectReason]()
-
-    // width in points of string in current font (may be in trouble if 1 user space unit != 1 point)
-    def widthPoint(t: String, pc: ParserContext) = {
-      val w = pc.font.getWidthPoint(t, pc.fontSize)
-      log.debug(s"redact.widthPoint: t = $t, w = $w")
-      w
+    // Consider redacting a block of text (the X's below) over multiple lines:
+    //   Some text XXXXXXXXXXXXXXX
+    //   XXXXXXXXXXXXXXXXXXXXXXXXX
+    //   XXX and more.
+    // To draw a polygon over the redacted text we need the (x, y, height) of the left edge of the first redacted chunk (assuming the rest of the line has the same font height)
+    // and likewise for the right edge of the last redacted chunk; as well as the min left margin and max right margin for the intervening lines.
+    // We'll use a Rect for the (x, y, height), not using Rect.width. Mutable since we'll be doing this a lot.
+    class RedactBox {
+      var start: Option[Rect] = None   // left edge of the first redacted chunk
+      var end: Option[Rect] = None     // right edge of the last redacted chunk
+      var left: Float = Float.MaxValue   // min left margin
+      var right: Float = Float.MinValue  // max right margin
+      override def toString = s"RedactBox($start, $end, $left, $right)" 
     }
+    val boxes = new scala.collection.mutable.HashMap[RedactItem, RedactBox]() {
+      override def default(ri: RedactItem) = {
+        val b = new RedactBox
+        put(ri, b) // auto insert of new item on 1st get
+        b
+      }
+    }
+    // save geometry of redacted region
+    def setBox(ri: RedactItem, xStart: Float, xEnd: Float, y: Float, height: Float) = {
+      if (xEnd - xStart > 0.1f) { // only if region is redacted
+        val b = boxes(ri)
+        if (b.start.isEmpty) b.start = Some(Rect(xStart, y, 0.0f, height))
+        if (xStart < b.left) b.left = xStart
+        b.end = Some(Rect(xEnd, y, 0.0f, height))
+        if (xEnd > b.right) b.right = xEnd
+        log.debug(s"redact.setBox: b = $b, inputs: ri = $ri, xStart = $xStart, xEnd = $xEnd, y = $y, height = $height")
+      }
+    }
+    // get polygon vertices
+    def getPoly(b: RedactBox): Option[Seq[PdfBuilder.Point]] = {
+      for {
+        s <- b.start
+        e <- b.end
+        sBot = Point(s.x, s.y)
+        sTop = Point(s.x, s.y + s.height)
+        eBot = Point(e.x, e.y)
+        eTop = Point(e.x, e.y + e.height)
+      } yield
+        if (abs(s.y - e.y) < 0.1f) Seq(sBot, sTop, eTop, eBot) // one line so rectangle
+        else Seq(sBot, sTop, Point(b.right, sTop.y), Point(b.right, eTop.y), eTop, eBot, Point(b.left, eBot.y), Point(b.left, sBot.y)) // else octagon
+    }
+    def getReasonPosition(b: RedactBox, width: Float): Option[Point] = for {
+      s <- b.start
+      e <- b.end
+    } yield
+      if (abs(s.y - e.y) < 0.1f) Point(s.x + 2.0f, s.y + 2.0f) // one line
+      else if ((s.y - e.y) > e.height * 1.8f) Point(b.left + 2.0f, (s.y + e.y)/2.0f) // > 2 lines so start at left of middle line (which is full width)
+      else if (b.right - s.x - 2.0f > width || b.right - s.x > e.x - b.left) Point(s.x + 2.0f, s.y + 2.0f) // text fits on first line or space on first line is wider so use first line
+      else Point(b.left + 2.0f, e.y + 2.0f) // use second (last) line
 
     val mauve = RGB(191f / 255f, 170f / 255f, 255f / 255f)
+    val darkMauve = mauve.darker(0.5f)
     val grey = RGB(0.3f, 0.3f, 0.3f)
     // val black = RGB(0.0f, 0.0f, 0.0f)
-
-    var streamOffset = 0
-    val redactedSoFar = new StringBuilder
-    var needMoveText = false
-    var rectX: Float = 0.0f
-    var textXOrigin: Float = 0.0f
-    var sumDelta: Float = 0.0f
-
-    def moveShowText(text: String, reason: String, c: ResultChunk) = {
-      if (needMoveText) {
-        // draw rect
-        val rectWidth = widthPoint(redactedSoFar.toString, c.parserContext)
-        val r = Rect(rectX, c.fontY, rectWidth, c.fontHeight)
-        log.debug(s"redact.moveShowText: r = $r")
-        rectReasons += RectReason(r, reason)
-        val delta = rectX + rectWidth - textXOrigin
-        bldr.moveText(delta)
-        sumDelta += delta
-        textXOrigin += delta
-        redactedSoFar.clear
-        needMoveText = false
-      }
-      if (!text.isEmpty) bldr.showText(text, c.parserContext.font)
-    }
-
-    // for each redacted chunk
-    var prevChunk: ResultChunk = null
-    var prevRedactItem: RedactItem = RedactItem(0, 0, 0, "")
-    result.get.chunksToRedact(rItems).foreach {
-      case (c, redactItems) =>
-        log.debug(s"redact: c = $c")
-        val pc = c.parserContext
-
-        // For PDF command [ ... ]TJ we get a chunk for every array element, but they all have the same ParserContext (that of the whole TJ),
-        // so we only want to copy the content preceding the TJ once!
-        if (pc.streamStart.toInt >= streamOffset) {
-          moveShowText("", prevRedactItem.reason, prevChunk) // before start of new line draw rectangle for redacted text at the end of the previous line
-          if (sumDelta > 0.0001f) bldr.moveText(-sumDelta)
-
-          log.debug(s"redact: copy stream up to start of chunk to be redacted from $streamOffset to ${pc.streamStart.toInt}, continue from ${pc.streamEnd.toInt}")
-          bldr.w(stream.slice(streamOffset, pc.streamStart.toInt))
-          bldr.newLine // copied portion of stream doesn't always end with this and no harm done by an extra one
-          streamOffset = pc.streamEnd.toInt
-
-          redactedSoFar.clear
-          needMoveText = false
-          textXOrigin = c.startLocation.get(I1)
-          sumDelta = 0.0f
-        }
-
-        var textOffset = 0
-        // for each RedactItem  
-        redactItems.sortBy(_.start).map { ri =>
-          // convert segment text offsets from relative to start of page to relative to start of text in the chunk
-          if (ri.start == ri.end) (c.text.length, c.text.length, ri) // no redaction for this chunk, copy it all
-          else (max(ri.start - c.textStart, 0), min(ri.end - c.textStart, c.text.length), ri)
-        }.foreach {
-          case (redactStart, redactEnd, ri) =>
-            log.debug(s"redact: c.text = ${c.text}, textOffset = $textOffset, redactStart = $redactStart, redactEnd = $redactEnd, redactedSoFar = $redactedSoFar")
-            if (redactStart > textOffset) {
-              val s = c.text.substring(textOffset, redactStart)
-              log.debug(s"redact: write text: '$s'")
-              moveShowText(s, ri.reason, c)
-            }
-            if (redactStart < c.text.length) {
-              if (!needMoveText) {
-                rectX = c.startLocation.get(I1) + widthPoint(c.text.substring(0, redactStart), c.parserContext)
-                needMoveText = true
-              }
-              redactedSoFar ++= c.text.substring(redactStart, redactEnd)
-            }
-            textOffset = redactEnd
-            prevRedactItem = ri
-        }
-        if (textOffset < c.text.length) {
-          val s = c.text.substring(textOffset)
-          log.debug(s"redact: write remaining text: '$s'")
-          moveShowText(s, prevRedactItem.reason, c)
-        }
-        // Consider case of redacting multiple short chunks, mostly one per char, at the end of a line.
-        // To avoid writing a separate rectangle for each chunk here we delay until we hit the next line
-        // and then write one rectangle for the sequence of chunks.
-        // That was the idea behind redactedSoFar. Is that still needed?
-        prevChunk = c
-    }
-    moveShowText("", prevRedactItem.reason, prevChunk) // before remainder of stream draw rectangle for redacted text at the end of the previous line
-    if (sumDelta > 0.0001f) bldr.moveText(-sumDelta)
     
-    log.debug(s"redact: copy remainder of stream from $streamOffset")
-    bldr.w(stream.slice(streamOffset, stream.length))
+    /**
+     * Redact a sequence of text chunks all from a single PDF command (e.g. a TJ, so all chunks are on the same line).
+     */
+    def redactChunks(chunks: Seq[ResultChunk], ris: Seq[RedactItem]) = {
+      // TODO: Bug: Redacting "Chris Richardson" from "by Chris Richardson, predicts" (mostly have a chunk for each individual character, but the "so" in "Richardson" is one chunk) 
+      // redactChunks: c = ResultChunk(,,1864,false,346.29547,398.1,1.0 ...
+      //                            text            x         y     z
+      // the "," after the redacted portion is at x = 346.29547
+      // moveText: width = 75.704956 (width of "Chris Richardson")
+      // showText: text = ','
+      // moveText: width = 2.6879883 (width of ",")
+      // showText: text = ' '
+      // moveText: width = 2.604004 (width of " ")
+      // showText: text = 'p'
+      // So far this all looks good and is consistent with what iText RUPS shows for the output binary content; however when viewed in Evince (Linux doc viewer),
+      // the comma is not displayed and subsequent text is one comma width too far to the left (probably overlaying and hiding the comma)!
+      // Increasing the PDF output precision in PdfBuilder from %.1f to %.3f decreased the positioning error to less than a comma width, but the comma is still not visible. 
+    
+      val parserContext = chunks.head.parserContext // same for all chunks from the same PDF command
+     
+      var textOffset = chunks.head.startLocation.get(I1) // position of first chunk relative to left edge of page
+      var move = 0.0f
+      def moveText(offset: Float) = move = offset // keep the last move request and execute it when we have some subsequent text
+      def showText(s: String) = if (!s.isEmpty) {
+        val delta = move - textOffset
+        if (delta > 0.1f) {
+          bldr.moveText(delta)
+          textOffset = move
+        }
+        bldr.showText(s, parserContext.font)
+      }
+    
+      // width in points of string in current font (may be in trouble if 1 user space unit != 1 point)
+      def widthPoint(s: String) = {
+        val w = parserContext.font.getWidthPoint(s, parserContext.fontSize)
+        log.debug(s"redact.widthPoint: s = $s, w = $w")
+        w
+      }
+            
+      for (c <- chunks) {        
+        // convert RedactItem text offsets from relative to start of page to relative to start of text in the chunk
+        val strEndRi = ris flatMap { ri => 
+          val str = max(ri.start - c.textStart, 0)
+          val end = min(ri.end - c.textStart, c.text.length)
+          if (str < end) Some((str, end, ri)) else None
+        }
+        log.debug(s"redactChunks: c = $c, strEndRi = $strEndRi")
+        if (strEndRi.isEmpty) {
+          // this chunk not redacted
+          moveText(c.startLocation.get(I1))
+          showText(c.text)
+        } else {
+          
+          // copy chunk text up to first portion to be redacted
+          if (strEndRi.head._1 > 0) {
+            moveText(c.startLocation.get(I1))
+            showText(c.text.substring(0, strEndRi.head._1))
+          }
+          
+          // for each portion to be redacted except the last
+          for (slide2 <- strEndRi.sliding(2)) slide2 match {
+            case Seq((str1, end1, ri1), (str2, _, ri2)) =>            
+              // skip redacted portion
+              val xEnd = c.startLocation.get(I1) + widthPoint(c.text.substring(0, str2))
+              moveText(xEnd)
+              // copy chunk text from end of redacted portion to start of next redacted portion
+              showText(c.text.substring(end1, str2))
+              
+              val xStart = c.startLocation.get(I1) + widthPoint(c.text.substring(0, str1))
+              setBox(ri1, xStart, xEnd, c.fontY, c.fontHeight) // c.fontY takes font descent into account whereas c.startLocation.get(I2) does not
+  
+            case Seq((str1, end1, ri1)) => // only one portion to be redacted
+          }
+  
+          val lst = strEndRi.last
+          // skip last redacted portion
+          val xEnd = c.startLocation.get(I1) + widthPoint(c.text.substring(0, lst._2))
+          moveText(xEnd)
+          // copy chunk text after last bit to be redacted
+          showText(c.text.substring(lst._2))
+          
+          val xStart = c.startLocation.get(I1) + widthPoint(c.text.substring(0, lst._1))
+          setBox(lst._3, xStart, xEnd, c.fontY, c.fontHeight)
+        }
+      }
+    }
+    
+    val chunksToRedact = rslt.chunksToRedact(rItems)
 
-    bldr.newLine
-    for (r <- rectReasons) {
-      bldr.save
-        .rgb(mauve).rect(r.rect).fill.clip
-        .rgb(grey).beginText.moveText(r.rect.x + 2.0f, r.rect.y + 2.0f).fontSize(fontName, r.rect.height * 3.0f / 4.0f).showText(r.reason, baseFont).endText
-        .restore
+    // copy stream up to first chunk to be redacted
+    bldr.w(stream.slice(0, chunksToRedact.head._1.head.parserContext.streamStart.toInt)).newLine // copied portion of stream doesn't always end with this and no harm done by an extra one
+    
+    // for each chunk other than the last
+    chunksToRedact.sliding(2).foreach {
+      case Seq((chunks1, ris1), (chunks2, _)) =>
+        redactChunks(chunks1, ris1)
+        // copy stream from end of chunks1 to start of chunks2
+        bldr.w(stream.slice(chunks1.head.parserContext.streamEnd.toInt, chunks2.head.parserContext.streamStart.toInt)).newLine
+      case Seq((chunks1, ris1)) => // only one chunk
     }
 
+    val lst = chunksToRedact.last
+    redactChunks(lst._1, lst._2)
+    // copy stream from end of last chunk to be redacted to end
+    bldr.w(stream.slice(lst._1.head.parserContext.streamEnd.toInt, stream.length)).newLine
+    
+    // working: --redact '(1,1848,1864,reason)' --redact '(1,1878,1888,reason2)'
+    // working: --redact '(1,241,267,reason1)' --redact '(1,1848,1864,reason2)' 
+    // not working: --redact '(1,2618,2631,reason2)'
+    // not working: --redact '(1,2936,2946,reason2)'
+    log.debug(s"redact: boxes = $boxes")
+    for {
+      (ri, b) <- boxes
+      vertices <- getPoly(b)
+      fontSize = (vertices(1).y - vertices.head.y) * 3.0f / 4.0f
+      rPos <- getReasonPosition(b, baseFont.getWidthPoint(ri.reason, fontSize))
+    } {
+      log.debug(s"redact: vertices = $vertices")
+      bldr.save
+      .fillColour(mauve).strokeColour(darkMauve).poly(vertices).clip
+      .fillColour(darkMauve).beginText.fontSize(fontName, fontSize).moveText(rPos.x, rPos.y).showText(ri.reason, baseFont).endText
+      .restore
+    }
+    
     bldr.bytes
   }
-
 }

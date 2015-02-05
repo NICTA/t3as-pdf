@@ -29,7 +29,7 @@ import com.itextpdf.text.pdf.{PRTokeniser, PdfContentParser, PdfDictionary, PdfL
 import com.itextpdf.text.pdf.parser.{InlineImageUtils, MyPdfContentStreamProcessor, RenderListener}
 
 /** Processes content of a page using the specified listener.
-  * Provides access to the listener to the stream offsets of parsed content, required for redaction.
+  * Provides access by the listener to the stream offsets of parsed content, required for redaction.
   *
   * Based on com.itextpdf.text.pdf.parser.PdfReaderContentParser
   */

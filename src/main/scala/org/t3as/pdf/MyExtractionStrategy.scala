@@ -109,24 +109,28 @@ case class MyResult(chunks: Seq[ResultChunk]) {
   /** Concatenate text from all chunks to get the document text. */
   val text = chunks.iterator.map(_.text).mkString("")
 
-  /** Find chunks required for redaction.
+  /** Find chunks for redaction.
    * 
    * The PDF operator '[ ... ]TJ' results in a separate chunk for each array element.
    * Redaction replaces all the content for an operator, so if we redact one of these chunks we need to reproduce all the others.
-   * So we return a) chunks that intersect with `offsets` as well as b) chunks that result from the same PDF operator (sameStreamStart) as the a) chunks.
+   * To facilitate this we group all the chunks from the same TJ (same parserContext.streamStart).
+   * So we return a sequence of:
+   *  - sequence of chunks all with same streamStart
+   *  - sequence of RedactItems that intersect any of these chunks
+   * where both sequences are non-empty.
+   * 
+   * Redaction uses this to:
+   * - copy bytes in the stream not related to redacted content (offsets not in any parserContext.streamStart..parserContext.streamEnd)
+   * - generate new redacted content to replace the bytes omitted above
    */
   def chunksToRedact(offsets: Seq[RedactItem]) = {
-    val a = for {
-      c <- chunks if !c.inferredWhiteSpace
-      s = offsets.filter(c.intersects) if !s.isEmpty
-    } yield (c, s)
-    log.debug(s"chunksToRedact: a = ${a.map(_._1.text).mkString("|")}")
-    val setA = a.map(_._1).toSet
-    val setStreamStart = setA.map(_.parserContext.streamStart)
-    val noRedact = Seq(RedactItem(0, 0, 0, ""))
-    val b = chunks.filter(c => !c.inferredWhiteSpace && setStreamStart.contains(c.parserContext.streamStart) && !setA.contains(c)).map((_, noRedact))
-    val r = (a ++ b).sortBy(_._1.textStart)
-    log.debug(s"chunksToRedact: r = ${r.map(_._1.text).mkString("|")}")
+    val r = (for {
+      chunksWithSameStreamStart <- chunks.filter(!_.inferredWhiteSpace).groupBy(_.parserContext.streamStart).map(_._2)
+      ris = offsets.filter { o => chunksWithSameStreamStart.exists { c => c.intersects(o) } } if !ris.isEmpty
+    } yield (chunksWithSameStreamStart.sortBy(_.textStart), ris.sortBy(_.start))
+    ).toSeq.sortBy(_._1.head.textStart)
+    log.debug(s"chunksToRedact: r = ${r.flatMap(_._1.map(_.text)).mkString("|")}")
+    // log.debug(s"chunksToRedact: r = $r")
     r
   }
 }
@@ -157,8 +161,8 @@ class MyExtractionStrategy extends TextExtractionStrategy with HasParserContext 
    * so its normal that encoding wasn't specified here.
    * Maybe getTextRenderMode() == 3 for Invisible?
    * 
-   * When the PDF contains '[ ... ]TJ' an array of text chunks each with their own offset, we get called for each array element with the same parserContext
-   * (which we could use to know we're on the same line).  
+   * When the PDF contains '[ ... ]TJ' this is an array of text chunks each with their own horizontal offset
+   * and we get called for each array element with the same parserContext (which guarantees these chunks on the same line).  
    */
   override def renderText(r: TextRenderInfo) = {
     import Vector.I2

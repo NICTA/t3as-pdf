@@ -29,7 +29,10 @@ import org.slf4j.LoggerFactory
 
 object PdfBuilder {
   val utf8 = Charset.forName("UTF-8")
-  case class RGB(red: Float, green: Float, blue: Float) // 0.0f .. 1.0f
+  case class RGB(red: Float, green: Float, blue: Float) { // 0.0f .. 1.0f
+    def darker(f: Float) = RGB(red * f, green * f, blue * f)
+  }
+  case class Point(x: Float, y: Float)
   case class Rect(x: Float, y: Float, width: Float, height: Float)
 }
 
@@ -69,12 +72,12 @@ class PdfBuilder {
 
   def fontSize(name: PdfName, size: Float) = {
     w(name.getBytes)
-    w(u(f" $size%.1f Tf\n"))
+    w(u(f" $size%.3f Tf\n"))
   }
 
   def moveText(width: Float, height: Float = 0.0f) = {
     log.debug(s"moveText: width = $width")
-    w(u(f"$width%.1f $height%.1f Td\n"))
+    w(u(f"$width%.3f $height%.3f Td\n"))
   }
 
   val uSTStr = u("(")
@@ -86,17 +89,23 @@ class PdfBuilder {
     w(uSTEnd)
   }
 
-  def rgb(c: RGB) = w(u(f"${c.red}%.5f ${c.green}%.5f ${c.blue}%.5f rg\n"))
+  def fillColour(c: RGB) = w(u(f"${c.red}%.5f ${c.green}%.5f ${c.blue}%.5f rg\n"))
+  def strokeColour(c: RGB) = w(u(f"${c.red}%.5f ${c.green}%.5f ${c.blue}%.5f RG\n"))
+  
+  def rect(r: Rect) = w(u(f"${r.x}%.3f ${r.y}%.3f ${r.width}%.3f ${r.height}%.3f re\n"))
+  
+  def moveTo(p: Point) = w(u(f"${p.x}%.3f ${p.y}%.3f m\n"))
+  def lineTo(p: Point) = w(u(f"${p.x}%.3f ${p.y}%.3f l\n"))
 
-  def rect(r: Rect) = {
-    log.debug(s"rect: r = $r")
-    w(u(f"${r.x}%.2f ${r.y}%.2f ${r.width}%.2f ${r.height}%.2f re\n"))
-  }
-
-  val uFill = u("f\n")
-  def fill = w(uFill)
+  val uClosePathFillStroke = u("b\n")
+  def closePathFillStroke = w(uClosePathFillStroke)
 
   val uClip = u("W\n") // Modifies the current clipping path by intersecting it with the current path, using the nonzero winding rule
   def clip = w(uClip)
 
+  def poly(points: Seq[Point]) = {
+    moveTo(points.head)
+    points.drop(1).foreach(lineTo)
+    closePathFillStroke
+  }
 }

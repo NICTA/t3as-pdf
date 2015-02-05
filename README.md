@@ -52,10 +52,10 @@ In the text below:
 
 **new Java**: [`com.itextpdf.text.pdf.parser.MyPdfContentStreamProcessor`](https://github.com/NICTA/t3as-pdf/blob/master/src/main/java/com/itextpdf/text/pdf/parser/MyPdfContentStreamProcessor.java)
 (needs package access)
-<br>This is a copy not a subclass. It's a big source file and I've made minimal changes - some private fields changed to protected and protected push/pop methods added, to support …
+<br>This is a copy not a subclass. It's a big source file and I've made minimal changes - some private fields changed to protected and protected getFontResourceName/push/pop methods added to support …
 
 **new Scala**: [`org.t3as.pdf.RedactionStreamProcessor`](https://github.com/NICTA/t3as-pdf/blob/master/src/main/scala/org/t3as/pdf/RedactionStreamProcessor.scala) extends MyPdfContentStreamProcessor
-<br>provides a way for the listener to obtain the start and end offsets into the binary stream that correspond to PDF operator being processed
+<br>provides a way for the listener to obtain the start and end offsets into the binary stream that correspond to the PDF operator being processed
 
 #### TextExtractionStrategy (a listener for a StreamProcessor)
 **itext Java**: [`com.itextpdf.text.pdf.parser.TextExtractionStrategy`](http://api.itextpdf.com/itext/com/itextpdf/text/pdf/parser/TextExtractionStrategy.html)

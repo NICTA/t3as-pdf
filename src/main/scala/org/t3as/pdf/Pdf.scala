@@ -44,15 +44,15 @@ import com.itextpdf.text.PageSize
  * The `extract` and `redact` operations allows experimentation with the improved text extraction and redaction features
  * which this project adds to iText.
  * 
- * For GUI tool to inspect the structure of a PDF try http://itextpdf.com/product/itext_rups.
+ * For a GUI tool to inspect the structure of a PDF file try http://itextpdf.com/product/itext_rups.
  */
 object Pdf {
   val log = LoggerFactory.getLogger(getClass)
 
-  val redactItemRe = """\( *([0-9]+) *, *([0-9]+) *, *([0-9]+) *\)""".r
+  val redactItemRe = """\( *([0-9]+) *, *([0-9]+) *, *([0-9]+), *(.*[^ ]) *\)""".r
   def toRedactItem(s: String) = {
-    val redactItemRe(page, str, end) = s
-    RedactItem(page.toInt, str.toInt, end.toInt, s"reason${str}-${end}")
+    val redactItemRe(page, str, end, reason) = s
+    RedactItem(page.toInt, str.toInt, end.toInt, reason)
   }
   implicit val reductItemRead: Read[RedactItem] = Read.reads(toRedactItem)
 
@@ -99,7 +99,7 @@ object Pdf {
       c.copy(pdfcopy = Some(x))
     } text(s"copy input to this file, default ${defValue.pdfcopy}")
 
-    opt[RedactItem]("redact") unbounded() valueName("(pageNum, startOffset, endOffset)") action { (x, c) =>
+    opt[RedactItem]("redact") unbounded() valueName("(pageNum, startOffset, endOffset, reason)") action { (x, c) =>
       c.copy(redact = c.redact :+ x)
     } text(s"section to redact as start and end offsets into extracted text, default ${defValue.redact}")
 
@@ -108,6 +108,7 @@ object Pdf {
 
   def main(args: Array[String]): Unit = {
     parser.parse(args, Config()) foreach { c =>
+      log.debug(s"Pdf: c = $c")
       c.create foreach (dst => create(dst, c.createWithRectangle))
       c.input foreach { src =>
         if (c.dump) dump(src)
