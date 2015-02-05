@@ -100,13 +100,14 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
     val s = new MyPRStream(in)
 
     val raw = PdfReader.getStreamBytesRaw(in)
-    if (origRawContent.map(_.sameElements(raw)).getOrElse(false) && result.isDefined) {
+    val ris = redactItems.filter(_.page == pageNum)
+    if (!ris.isEmpty && origRawContent.map(_.sameElements(raw)).getOrElse(false) && result.isDefined) {
       log.debug("MyPdfCopy.copyStream: redaction of page content stream...")
       val tbytes = Try(PdfReader.decodeBytes(raw, in)) // decodes according to filters such as FlateDecode
       // Try might catch: com.itextpdf.text.exceptions.UnsupportedPdfException: The filter /DCTDecode is not supported.
       // This is an image filter and the surrounding if should limit this code to the main content stream for the page (containing text), so it shouldn't happen.
       tbytes foreach { bytes => // success case
-        s.setData(redact(bytes, result.get, redactItems.filter(_.page == pageNum)), true) // deflates and sets `bytes` for MyPRStream.toPdf to use
+        s.setData(redact(bytes, result.get, ris), true) // deflates and sets `bytes` for MyPRStream.toPdf to use
       }
       if (tbytes.isFailure) tbytes.failed.foreach(e => log.warn("Can't decode stream", e))
       // Try.transform is more compact, but we don't want the same handling for exceptions from decodeBytes() and redact() 
