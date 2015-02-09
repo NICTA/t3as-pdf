@@ -33,6 +33,7 @@ import com.itextpdf.text.pdf.parser.ContentByteUtils
 import com.itextpdf.text.pdf.parser.Vector.{I1, I2}
 import scala.collection.mutable.ListBuffer
 import Math.{ min, max, abs }
+import com.itextpdf.text.pdf.PdfContentByte
 
 class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactItem]) extends PdfCopy(doc, out) {
   private val log = LoggerFactory.getLogger(getClass)
@@ -40,7 +41,11 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
   private var origRawContent: Option[Array[Byte]] = None
   private var result: Option[MyResult] = None
   private var pageNum = 0
+
+  /** resource name of font used to write redaction reason */
   private var fontName: PdfName = null
+  
+  /** font used to write redaction reason */
   private var baseFont: BaseFont = null
 
   pdf.addCreator("Redact v0.1 ©2014 NICTA (AGPL)")
@@ -110,7 +115,7 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
         s.setData(redact(bytes, result.get, ris), true) // deflates and sets `bytes` for MyPRStream.toPdf to use
       }
       if (tbytes.isFailure) tbytes.failed.foreach(e => log.warn("Can't decode stream", e))
-      // Try.transform is more compact, but we don't want the same handling for exceptions from decodeBytes() and redact() 
+      // Try.transform is more compact, but we don't want the same handling for exceptions from decodeBytes() (carry on without redaction) and redact() (termination from uncaught exception) 
     } else {
       log.debug("MyPdfCopy.copyStream: doesn't match origRawContent so leaving it alone")
     }
@@ -130,22 +135,42 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
   def redact(stream: Array[Byte], rslt: MyResult, rItems: Seq[RedactItem]) = {
     import PdfBuilder._
 
+//    TODO: Should we use iText's PdfContentByte instead of our PdfBuilder?
+//    val bldr2 = new PdfContentByte(this) // if we're not careful this could write to and corrupt our output - can we create a fresh PdfWriter to use here?
+//    bldr2.beginText();
+//    bldr2.setFontAndSize(baseFont, 10.0f) // this is the font for redaction reason - but we need current content font which we have in c.parserContext.font
+//    bldr2.showTextKerned("fred") // fails unless setFont() called first
+//    bldr2.showText(new PdfTextArray(...))
+//    val bytes = bldr2.getInternalBuffer.toByteArray
     val bldr = new PdfBuilder
-
-    // Consider redacting a block of text (the X's below) over multiple lines:
-    //   Some text XXXXXXXXXXXXXXX
-    //   XXXXXXXXXXXXXXXXXXXXXXXXX
-    //   XXX and more.
-    // To draw a polygon over the redacted text we need the (x, y, height) of the left edge of the first redacted chunk (assuming the rest of the line has the same font height)
-    // and likewise for the right edge of the last redacted chunk; as well as the min left margin and max right margin for the intervening lines.
-    // We'll use a Rect for the (x, y, height), not using Rect.width. Mutable since we'll be doing this a lot.
+    
+    /** Geometry of a redacted region.
+     *  
+     * Consider redacting a block of text (the X's below) over multiple lines:<pre>
+     *   Some text XXXXXXXXXXXXXXX
+     *   XXXXXXXXXXXXXXXXXXXXXXXXX
+     *   XXX and more.
+     * </pre>
+     * To draw a polygon over the redacted text we need the (x, y, height) of the left edge of the first redacted chunk (assuming the rest of the line has the same font height)
+     * and likewise for the right edge of the last redacted chunk; as well as the min left margin and max right margin for the intervening lines.
+     * We'll use a Rect for the (x, y, height), not using Rect.width. Mutable since we'll be updating this a lot.
+     */
     class RedactBox {
-      var start: Option[Rect] = None   // left edge of the first redacted chunk
-      var end: Option[Rect] = None     // right edge of the last redacted chunk
-      var left: Float = Float.MaxValue   // min left margin
-      var right: Float = Float.MinValue  // max right margin
+      /** left edge of the first redacted chunk */
+      var start: Option[Rect] = None
+
+      /** right edge of the last redacted chunk */
+      var end: Option[Rect] = None
+      
+      /** min x = left margin */
+      var left: Float = Float.MaxValue
+      
+      /** max x = right margin */
+      var right: Float = Float.MinValue
+      
       override def toString = s"RedactBox($start, $end, $left, $right)" 
     }
+    
     val boxes = new scala.collection.mutable.HashMap[RedactItem, RedactBox]() {
       override def default(ri: RedactItem) = {
         val b = new RedactBox
@@ -153,7 +178,8 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
         b
       }
     }
-    // save geometry of redacted region
+    
+    /** updates `boxes` with geometry of redacted region as described for `RedactBox` above */
     def setBox(ri: RedactItem, xStart: Float, xEnd: Float, y: Float, height: Float) = {
       if (xEnd - xStart > 0.1f) { // only if region is redacted
         val b = boxes(ri)
@@ -164,7 +190,8 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
         log.debug(s"redact.setBox: b = $b, inputs: ri = $ri, xStart = $xStart, xEnd = $xEnd, y = $y, height = $height")
       }
     }
-    // get polygon vertices
+    
+    /** returns polygon vertices for a redacted region */
     def getPoly(b: RedactBox): Option[Seq[PdfBuilder.Point]] = {
       for {
         s <- b.start
@@ -177,6 +204,8 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
         if (abs(s.y - e.y) < 0.1f) Seq(sBot, sTop, eTop, eBot) // one line so rectangle
         else Seq(sBot, sTop, Point(b.right, sTop.y), Point(b.right, eTop.y), eTop, eBot, Point(b.left, eBot.y), Point(b.left, sBot.y)) // else octagon
     }
+    
+    /** returns Point at which to write the reason for redaction of a region */
     def getReasonPosition(b: RedactBox, width: Float): Option[Point] = for {
       s <- b.start
       e <- b.end

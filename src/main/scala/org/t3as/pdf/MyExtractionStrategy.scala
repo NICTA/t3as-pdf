@@ -157,8 +157,6 @@ class MyExtractionStrategy extends TextExtractionStrategy with HasParserContext 
    * Encoding needs to be specified for Type1 (orig Adobe) fonts and Type3 fonts (outlines defined using PDF graphics primitives), but not for TrueType or Type0 (composite) fonts,
    * so its normal that encoding wasn't specified here.
    * So I'm not sure if/how we should filter this spurious text. Could look at size, stroke, fill attributes to see why it is invisible.
-   * Encoding needs to be specified for Type1 (orig Adobe) fonts and Type3 fonts (outlines defined using PDF graphics primitives), but not for TrueType or Type0 (composite) fonts,
-   * so its normal that encoding wasn't specified here.
    * Maybe getTextRenderMode() == 3 for Invisible?
    * 
    * When the PDF contains '[ ... ]TJ' this is an array of text chunks each with their own horizontal offset

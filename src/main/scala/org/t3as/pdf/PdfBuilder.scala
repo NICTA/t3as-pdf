@@ -21,11 +21,12 @@
 package org.t3as.pdf
 
 import java.nio.charset.Charset
-import com.itextpdf.text.pdf.PdfName
+
 import scala.collection.mutable.ArrayBuffer
-import com.itextpdf.text.pdf.BaseFont
-import PdfBuilder._
+
 import org.slf4j.LoggerFactory
+
+import com.itextpdf.text.pdf.{BaseFont, EscapeString, PdfName}
 
 object PdfBuilder {
   val utf8 = Charset.forName("UTF-8")
@@ -35,6 +36,7 @@ object PdfBuilder {
   case class Point(x: Float, y: Float)
   case class Rect(x: Float, y: Float, width: Float, height: Float)
 }
+import PdfBuilder._
 
 /**
  * Byte level creation of PDF content stream.
@@ -80,13 +82,12 @@ class PdfBuilder {
     w(u(f"$width%.3f $height%.3f Td\n"))
   }
 
-  val uSTStr = u("(")
-  val uSTEnd = u(")Tj\n")
+  // val uSTStr = u("(")
+  val uST = u("Tj\n")
   def showText(text: String, f: BaseFont) = {
     log.debug(s"showText: text = '$text'")
-    w(uSTStr)
-    w(f.convertToBytes(text))
-    w(uSTEnd)
+    w(EscapeString.escapeString(f.convertToBytes(text)))
+    w(uST)
   }
 
   def fillColour(c: RGB) = w(u(f"${c.red}%.5f ${c.green}%.5f ${c.blue}%.5f rg\n"))
