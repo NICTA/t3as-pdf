@@ -20,7 +20,7 @@
  */
 package org.t3as.pdf
 
-import java.io.{File, FileOutputStream}
+import java.io.{File, FileInputStream, FileOutputStream, InputStream, OutputStream}
 import scala.collection.JavaConversions.asScalaSet
 import scala.collection.mutable.ListBuffer
 import scala.language.postfixOps
@@ -114,7 +114,7 @@ object Pdf {
         if (c.dump) dump(src)
         if (c.parse) parse(src)
         if (c.extract) println(extract(src))
-        c.pdfcopy foreach (redact(src, _, c.redact))
+        c.pdfcopy foreach (dst => redact(new FileInputStream(src), new FileOutputStream(dst), c.redact))
       }
     }
   }
@@ -190,13 +190,17 @@ government struggling to explain unpopular policies and his premiership facing i
     pages.toList
   }
 
-  def redact(src: File, dst: File, redact: Seq[RedactItem]) {
+  /**
+   * Performs redactions specified by `redact` parameter.
+   * The `in` and `out` streams are closed.
+   */
+  def redact(in: InputStream, out: OutputStream, redact: Seq[RedactItem]) {
     val doc = new Document
-    val pdfCopy = new PdfCopyRedact(doc, new FileOutputStream(dst), redact) // must be before doc.open; stream closed by doc.close
+    val pdfCopy = new PdfCopyRedact(doc, out, redact) // must be before doc.open; stream closed by doc.close
     doc.open
     for {
       _ <- managed(doc)
-      r <- managed(new PdfReader(src.getPath))
+      r <- managed(new PdfReader(in)) // reads whole stream and closes immediately
       fontRef = addFont(r)
       baseFont = FontFactory.getFont(FontFactory.HELVETICA).getBaseFont
       pageNum <- 1 to r.getNumberOfPages
