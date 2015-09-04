@@ -1,8 +1,6 @@
-# t3as
+# t3as-pdf
 
-## Pdf
-
-### Introduction
+## Introduction
 
 This project augments [itext](http://itextpdf.com/) with enhanced text extraction and new
 redaction capability.
@@ -19,34 +17,82 @@ The redaction capabilty provides:
 
 See also: [t3as-redact](https://github.com/NICTA/t3as-redact) which depends on this project.
 
-### Build
+## Install Tools
+
+To run the code install:
+
+- a JRE e.g. from openjdk-7 (prefered for Scala 2.11) or openjdk-8 (will be required for Scala 2.12);
+- the build tool [sbt](http://www.scala-sbt.org/).
+
+To develop [Scala](http://scala-lang.org/) code install:
+
+- the above items (or the full JDK instead of just the JRE, but the JRE should be sufficient);
+- [Eclipse IDE](https://www.eclipse.org/downloads/); and
+- the Scala plugin for Eclipse [scala-ide](http://scala-ide.org/download/current.html).
+
+## Build
  
- Build and publish to your local Ivy repository (so other projects can use it):
- 
-    sbt publishLocal
+Automatic builds are provided at: <https://social-watch.dev.etd.nicta.com.au/>.
 
-Build a [one-jar](http://one-jar.sourceforge.net/) - jar including all dependencies:
+The command:
 
-    sbt one-jar
+	sbt clean test package oneJar publishLocal dumpLicenseReport
 
-###Run
+from the project's top level directory:
+
+- cleans out previous build products,
+- runs all tests,
+- creates a jar file (project code), 
+- creates a [one-jar](http://one-jar.sourceforge.net/) file (project code with all 3rd party dependencies), 
+- publishes build products to the Ivy repository at ~/.ivy2/ (allowing other projects to depend on this one) and
+- generates a license report.
+
+## Develop With Eclipse
+
+The command:
+
+	sbt update-classifiers eclipse
+
+downloads source code for 3rd part dependencies and uses the [sbteclipse](https://github.com/typesafehub/sbteclipse/wiki/Using-sbteclipse) plugin to create the .project and .classpath files required by Eclipse.
+
+### Unit Tests in Eclipse
+
+This section describes further configuration required to run unit tests within Eclipse. This is not necessary for running tests with sbt (as shown in the Build section above).
+
+Our unit tests rely on picking up properties files preferentially from
+`src/test/resources` ahead of `src/main/resources`,
+but unfortunately sbteclipse does not place
+`target/scala-2.11/test-classes` (the destination for src/test/resources) ahead of
+`target/scala-2.11/classes` (the destination for src/main/resources) in the classpath.
+This has to be corrected in Eclipse's `Build Path` for unit tests to pass (move all `src/test` items ahead of all `src/main` items).
+
+## Release
+
+The command:
+
+	sbt release
+
+uses the [sbt-release](https://github.com/sbt/sbt-release) plugin to perform the fairly long (and otherwise error prone) sequence of steps
+required to properly release a version of the software.
+
+## Run
 
 To run the CLI from sbt:
 
     sbt
     > run --help
     
-To run the CLI from a one-jar:
+To run the CLI from the one-jar:
 
-    java -jar target/scala-2.11/pdf_2.11-0.1-one-jar.jar --help
+    java -jar target/scala-2.11/t3as-pdf_{scala-version}-{project-version}-one-jar.jar --help
 
-### Software Description
+## Software Description
 
 In the text below:
  - **itext Java** means we're talking about Java code provided by itext
  - **new Java/Scala** means we're talking about Java/Scala code provided by this project 
 
-#### StreamProcessor
+### StreamProcessor
 **itext Java**: [`com.itextpdf.text.pdf.parser.PdfContentStreamProcessor`](http://api.itextpdf.com/itext/com/itextpdf/text/pdf/parser/PdfContentStreamProcessor.html)
 <br>tokenizes a binary PDF content stream, calling a listener for each parsed PDF operator
 
@@ -57,7 +103,7 @@ In the text below:
 **new Scala**: [`org.t3as.pdf.RedactionStreamProcessor`](https://github.com/NICTA/t3as-pdf/blob/master/src/main/scala/org/t3as/pdf/RedactionStreamProcessor.scala) extends MyPdfContentStreamProcessor
 <br>provides a way for the listener to obtain the start and end offsets into the binary stream that correspond to the PDF operator being processed
 
-#### TextExtractionStrategy (a listener for a StreamProcessor)
+### TextExtractionStrategy (a listener for a StreamProcessor)
 **itext Java**: [`com.itextpdf.text.pdf.parser.TextExtractionStrategy`](http://api.itextpdf.com/itext/com/itextpdf/text/pdf/parser/TextExtractionStrategy.html)
 <br>tracks coordinate transformations to calculate where text appears on the page
  - text chunks with close to the same baseline are assumed to be on the same line
@@ -74,7 +120,7 @@ During parsing, for each text chunk it saves:
 
 Chunks can occur in any order in the stream, only when parsing is complete can we figure out their order on the page and then how to map between text offsets and stream offsets. This is done by the `result` method.
 
-#### Copy/Redact
+### Copy/Redact
 **itext Java**: [`com.itextpdf.text.pdf.PdfCopy`](http://api.itextpdf.com/itext/com/itextpdf/text/pdf/PdfCopy.html)
 <br>copies pages from input files to output file
 
@@ -86,7 +132,7 @@ Chunks can occur in any order in the stream, only when parsing is complete can w
  -  `copyDictionary` to avoid copying dictionaries of type ANNOT (contains sticky notes, link URI's to email addresses, in/external links etc.)
  - `copyStream` if stream is the main content stream a redacted copy is stored, otherwise it uses the input stream unmodified
 
-#### Stream
+### Stream
 **itext Java**: [`com.itextpdf.text.pdf.PRStream`](http://api.itextpdf.com/itext/com/itextpdf/text/pdf/PRStream.html)
 <br>copies the content stream to the output PDF
 
@@ -94,7 +140,7 @@ Chunks can occur in any order in the stream, only when parsing is complete can w
 (needs package access)
 <br>if a redacted copy of the stream has been stored write that instead of the input content stream
 
-### Legal
+## Legal
 
 This software is released under the terms of the [AGPL](http://www.gnu.org/licenses/agpl-3.0.en.html). Source code for all transitive dependencies is available at [t3as-legal](https://github.com/NICTA/t3as-legal).
 

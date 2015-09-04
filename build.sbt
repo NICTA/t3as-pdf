@@ -1,20 +1,6 @@
 import ReleaseTransformations._
 import com.typesafe.sbt.license.{DepModuleInfo, LicenseInfo}
 
-// default release process, but without publishArtifacts
-releaseProcess := Seq[ReleaseStep](
-  checkSnapshotDependencies,
-  inquireVersions,
-  runTest,
-  setReleaseVersion,
-  commitReleaseVersion,
-  tagRelease,
-  // publishArtifacts,
-  setNextVersion,
-  commitNextVersion,
-  pushChanges
-)
-
 organization := "org.t3as"
 
 name := "t3as-pdf"
@@ -25,10 +11,19 @@ licenses := Seq("GNU Affero General Public License v3" -> url("http://www.gnu.or
 
 homepage := Some(url("https://github.com/NICTA/t3as-pdf"))
 
-scalaVersion := "2.11.2"
+scalaVersion := "2.11.7"
 
 scalacOptions ++= Seq("-unchecked", "-deprecation", "-feature")
 
+libraryDependencies ++= Seq(
+  "com.github.scopt" %% "scopt" % "3.2.0",
+  "com.jsuereth" %% "scala-arm" % "1.4",
+  "org.scalatest" %% "scalatest" % "2.2.1-M1" % Test,
+  "com.itextpdf" % "itextpdf" % "5.5.2",
+  "org.slf4j" % "slf4j-api" % "1.7.6",
+  "ch.qos.logback" % "logback-classic" % "1.1.1" % "runtime"
+  )
+  
 EclipseKeys.withSource := true
 
 // If Eclipse and sbt are both building to same dirs at same time it takes forever and produces corrupted builds.
@@ -45,15 +40,20 @@ com.github.retronym.SbtOneJar.oneJarSettings
 
 mainClass in (Compile, run) := Some("org.t3as.pdf.Pdf")
 
-libraryDependencies ++= Seq(
-  "com.github.scopt" %% "scopt" % "3.2.0",
-  "com.jsuereth" %% "scala-arm" % "1.4",
-  "org.scalatest" %% "scalatest" % "2.2.1-M1" % Test,
-  "com.itextpdf" % "itextpdf" % "5.5.2",
-  "org.slf4j" % "slf4j-api" % "1.7.6",
-  "ch.qos.logback" % "logback-classic" % "1.1.1" % "runtime"
-  )
-  
+// default release process, but without publishArtifacts
+releaseProcess := Seq[ReleaseStep](
+  checkSnapshotDependencies,
+  inquireVersions,
+  runTest,
+  setReleaseVersion,
+  commitReleaseVersion,
+  tagRelease,
+  // publishArtifacts,
+  setNextVersion,
+  commitNextVersion,
+  pushChanges
+)
+
 def hasPrefix(org: String, prefixes: Seq[String]) = prefixes.exists(x => org.startsWith(x))
 
 licenseOverrides := {
