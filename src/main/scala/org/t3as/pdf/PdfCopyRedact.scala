@@ -205,7 +205,12 @@ class PdfCopyRedact(doc: Document, out: OutputStream, redactItems: Seq[RedactIte
         else Seq(sBot, sTop, Point(b.right, sTop.y), Point(b.right, eTop.y), eTop, eBot, Point(b.left, eBot.y), Point(b.left, sBot.y)) // else octagon
     }
     
-    /** returns Point at which to write the reason for redaction of a region */
+    /** returns Point at which to write the reason for redaction of a region
+     *  TODO: subtract font descent (which is <=0) from y to raise the text baseline to account for chars descending below the baseline.
+     *  Elsewhere we use:
+     *  val r: TextRenderInfo = ...
+     *  val fontY = r.getDescentLine.getStartPoint.get(I2)
+     */
     def getReasonPosition(b: RedactBox, width: Float): Option[Point] = for {
       s <- b.start
       e <- b.end

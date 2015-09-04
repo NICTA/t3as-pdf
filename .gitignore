@@ -4,6 +4,8 @@
 
 # sbt specific
 .cache
+.cache-main
+.cache-tests
 .history/
 .lib/
 dist/*
@@ -17,7 +19,7 @@ project/plugins/project/
 .scala_dependencies
 .worksheet
 /bin/
+/test-bin/
 .classpath
 .project
 .settings/
-
